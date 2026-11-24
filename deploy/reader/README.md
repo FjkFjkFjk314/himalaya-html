@@ -1,11 +1,10 @@
 # Read-only mail reader
 
 The reader serves configured accounts using Python 3.9+ and the Himalaya stdio
-MCP protocol. Run it on the proxy host. It listens only on IPv4 loopback and
-relies on an authenticating reverse proxy to protect all routes, including
-direct message and attachment URLs. Keep the loopback listener private to the
-reader and trusted proxy operators. For the two-factor deployment, see
-[Seoul ingress](../seoul/).
+MCP protocol. Run it on the proxy host. Its authenticating reverse proxy
+protects every route, including direct message and attachment URLs. Use a
+private Unix socket for deployment on a shared host. The reader also supports
+an IPv4 loopback listener for standalone use. [Seoul ingress](../seoul/)
 
 ## Start the reader
 
@@ -51,10 +50,14 @@ stdin enabled and a raw stdout channel for the MCP messages. A Docker-based
 forced command should use `docker compose run --rm -T` with the same fixed
 arguments, including the account name.
 
-The reader allows loopback Host headers by default. Set `--host-header` to
-the exact value sent by the proxy, or have the proxy send
-`Host: 127.0.0.1:8080`. Configure the proxy to authenticate every route and
-avoid logging query strings, which contain mailbox and message identifiers.
+Use `--unix-socket /absolute/private/directory/reader.sock` to select the
+Unix socket listener. Its immediate directory must already exist, have mode
+`0700`, and belong to the reader process user. The reader creates the socket
+with mode `0600`. Run the proxy with the reader UID and have it send
+`Host: localhost`. The standalone IPv4 loopback listener accepts loopback
+Host headers. Use `--host-header` to allow another exact Host value as
+needed. Configure the proxy to authenticate every route and avoid logging
+query strings, which contain mailbox and message identifiers.
 
 Each request reads data on demand. HTML-only mail is converted to escaped
 text, with remote assets and clickable links omitted. Attachments are served

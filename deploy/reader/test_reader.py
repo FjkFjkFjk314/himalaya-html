@@ -4,15 +4,20 @@ import html
 import http.client
 import os
 import re
+import socket
+import stat
 import sys
 import tempfile
 import threading
 import unittest
-from http.server import HTTPServer
 from pathlib import Path
+from queue import Queue
 from unittest.mock import patch
 
-from reader import BackendError, ReaderHandler, call_mcp, load_accounts
+from reader import (
+    BackendError, LoopbackHTTPServer, MAX_CONCURRENT_REQUESTS, ReaderHandler,
+    UnixHTTPServer, call_mcp, load_accounts,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 GATEWAY = ROOT / "deploy/mcp/gateway.py"
@@ -67,7 +72,7 @@ class ReaderTest(unittest.TestCase):
                     sys.executable, str(GATEWAY), "--read-only", "--", str(BINARY),
                     "-c", str(config), "-a", account, "--log-level", "off", "mcp",
                 ]
-        server = HTTPServer(("127.0.0.1", 0), ReaderHandler)
+        server = LoopbackHTTPServer(("127.0.0.1", 0), ReaderHandler)
         server.hosts = {f"127.0.0.1:{server.server_port}"}
         server.accounts = {None: self.commands["school"]}
         server.legacy_account = None
@@ -205,6 +210,87 @@ class ReaderTest(unittest.TestCase):
         self.assertIn(b"Safety &lt;check&gt;", body)
         self.assertIn(b"account=school&amp;mailbox=inbox", body)
         self.assertEqual(self.request("/message?account=&message=m1")[0], 400)
+
+
+class ReaderConcurrencyTest(unittest.TestCase):
+    def test_slow_connections_leave_other_slots_available_and_slots_are_bounded(self):
+        started = Queue()
+
+        class ObservedHandler(ReaderHandler):
+            def setup(self):
+                super().setup()
+                started.put(self.request)
+
+        with LoopbackHTTPServer(("127.0.0.1", 0), ObservedHandler) as server:
+            server.hosts = {"localhost"}
+            thread = threading.Thread(target=server.serve_forever)
+            thread.start()
+            slow_clients = []
+            try:
+                # Idle clients each occupy one slot while waiting to send a request.
+                for _ in range(MAX_CONCURRENT_REQUESTS - 1):
+                    client = socket.create_connection(server.server_address, timeout=2)
+                    slow_clients.append(client)
+                    started.get(timeout=2)
+
+                with socket.create_connection(server.server_address, timeout=2) as client:
+                    client.sendall(b"GET /reader.css HTTP/1.1\r\nHost: localhost\r\n")
+                    started.get(timeout=2)
+                    with socket.create_connection(server.server_address, timeout=2) as excess:
+                        self.assertEqual(excess.recv(1), b"")
+                    client.sendall(b"\r\n")
+                    response = http.client.HTTPResponse(client)
+                    response.begin()
+                    self.assertEqual(response.status, 200)
+                    response.read()
+                    response.close()
+            finally:
+                for client in slow_clients:
+                    client.close()
+                server.shutdown()
+                thread.join()
+
+
+class UnixReaderTest(unittest.TestCase):
+    def test_private_socket_accepts_proxy_requests_and_is_cleaned_up(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "reader.sock"
+            with UnixHTTPServer(path, ReaderHandler) as server:
+                server.hosts = {"localhost"}
+                self.assertTrue(path.is_socket())
+                self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+                with self.assertRaises(OSError):
+                    UnixHTTPServer(path, ReaderHandler)
+                thread = threading.Thread(target=server.serve_forever)
+                thread.start()
+                try:
+                    for host, expected in (("localhost", 200), ("invalid", 403)):
+                        with socket.socket(socket.AF_UNIX) as connection:
+                            connection.settimeout(5)
+                            connection.connect(str(path))
+                            connection.sendall(
+                                f"GET /reader.css HTTP/1.1\r\nHost: {host}\r\n\r\n".encode()
+                            )
+                            response = http.client.HTTPResponse(connection)
+                            response.begin()
+                            self.assertEqual(response.status, expected)
+                            response.read()
+                            response.close()
+                finally:
+                    server.shutdown()
+                    thread.join()
+            self.assertFalse(path.exists())
+
+    def test_refuses_public_directory_and_symlink(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            public = root / "public"
+            public.mkdir(mode=0o755)
+            symlink = root / "link"
+            symlink.symlink_to(root, target_is_directory=True)
+            for parent in (public, symlink):
+                with self.subTest(directory=parent), self.assertRaises(ValueError):
+                    UnixHTTPServer(parent / "reader.sock", ReaderHandler)
 
 
 class ReaderConfigTest(unittest.TestCase):

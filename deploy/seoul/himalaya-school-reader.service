@@ -1,5 +1,5 @@
 [Unit]
-Description=Himalaya read-only school mail frontend
+Description=Himalaya read-only mail frontend
 After=network-online.target
 Wants=network-online.target
 
@@ -8,7 +8,11 @@ User=himalaya-reader
 Group=himalaya-reader
 WorkingDirectory=/srv/himalaya-mail/current/deploy/reader
 EnvironmentFile=/srv/himalaya-mail/shared/reader.env
-ExecStart=/usr/bin/python3 -B /srv/himalaya-mail/current/deploy/reader/reader.py --port ${READER_PORT}
+RuntimeDirectory=himalaya-mail-reader
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+ExecStartPre=/usr/bin/rm -f /run/himalaya-mail-reader/reader.sock
+ExecStart=/usr/bin/python3 -B /srv/himalaya-mail/current/deploy/reader/reader.py --unix-socket /run/himalaya-mail-reader/reader.sock
 Restart=on-failure
 RestartSec=3
 UMask=0077

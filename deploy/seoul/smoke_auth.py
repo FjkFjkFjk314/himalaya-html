@@ -1,17 +1,18 @@
-"""Exercise the Seoul auth stack with disposable accounts and a loopback reader."""
+"""Exercise the Seoul auth stack with disposable accounts and a Unix-socket reader."""
 
 import base64
 from email.utils import parsedate_to_datetime
 import hashlib
 import hmac
 import http.client
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 import json
 import os
 from pathlib import Path
 import re
 import secrets
 import socket
+from socketserver import ThreadingUnixStreamServer
 import subprocess
 import tempfile
 import threading
@@ -24,7 +25,7 @@ COOKIE_NAME = "himalaya_reader_session"
 
 class Reader(BaseHTTPRequestHandler):
     def do_GET(self):
-        assert self.headers["Host"] == f"127.0.0.1:{self.server.server_port}"
+        assert self.headers["Host"] == "localhost"
         assert "Cookie" not in self.headers and "Authorization" not in self.headers
         self.send_response(200)
         self.end_headers()
@@ -48,16 +49,17 @@ def totp(secret):
     return f"{number % 1_000_000:06d}"
 
 
-def exercise(directory, reader_port):
+def exercise(directory, reader_socket_dir):
     project = f"himalaya-auth-check-{secrets.token_hex(4)}"
-    proxy_port, auth_port = free_port(), free_port()
+    proxy_port = free_port()
     env = dict(
         os.environ,
         READER_HOST=HOST,
-        READER_PORT=str(reader_port),
         READER_PROXY_PORT=proxy_port,
-        READER_AUTH_PORT=auth_port,
         READER_AUTH_DIR=str(directory),
+        READER_SOCKET_DIR=str(reader_socket_dir),
+        READER_PROXY_UID=str(os.getuid()),
+        READER_PROXY_GID=str(os.getgid()),
     )
     manifest = Path(__file__).with_name("compose.yaml")
     compose_command = ["docker", "compose", "-f", str(manifest), "-p", project]
@@ -152,7 +154,9 @@ def exercise(directory, reader_port):
     for name in ("session", "storage"):
         path = directory / name
         path.write_text(secrets.token_hex(32) + "\n")
-        path.chmod(0o600)
+        # The container has a different UID and no DAC override. The enclosing
+        # temporary directory keeps the synthetic fixture private on the host.
+        path.chmod(0o444)
     password = secrets.token_urlsafe(32)
     seed = secrets.token_bytes(32)
     users = directory / "users.yml"
@@ -171,6 +175,7 @@ def exercise(directory, reader_port):
             "    email: reader@example.com\n"
             f"    password: '{digest}'\n"
         )
+        users.chmod(0o444)
         compose("config", "--quiet")
         compose(
             "run", "--rm", "--no-deps", "authelia", "authelia",
@@ -259,11 +264,15 @@ def exercise(directory, reader_port):
 
 if __name__ == "__main__":
     with tempfile.TemporaryDirectory(prefix="himalaya-auth-") as directory:
-        with ThreadingHTTPServer(("127.0.0.1", 0), Reader) as reader:
+        socket_dir = Path(directory) / "reader"
+        socket_dir.mkdir(mode=0o700)
+        socket_path = socket_dir / "reader.sock"
+        with ThreadingUnixStreamServer(str(socket_path), Reader) as reader:
+            socket_path.chmod(0o600)
             thread = threading.Thread(target=reader.serve_forever)
             thread.start()
             try:
-                exercise(Path(directory), reader.server_port)
+                exercise(Path(directory), socket_dir)
             finally:
                 reader.shutdown()
                 thread.join()

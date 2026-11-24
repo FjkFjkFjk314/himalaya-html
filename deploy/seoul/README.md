@@ -1,33 +1,40 @@
 # Seoul mail reader
 
 The dedicated HTTPS virtual host on the Seoul edge forwards to Caddy on
-`127.0.0.1:18080`. Caddy sends reader requests to the loopback reader on
-`127.0.0.1:8080` only after Authelia verifies both password and TOTP.
-Authelia serves its portal at `/authelia/` on the same host and keeps its
-session data in a dedicated, persistent Redis instance. The reader fetches mail
-through fixed-command SSH to the private executor.
+`127.0.0.1:18080`. Caddy talks to Authelia through a private Unix socket and
+forwards mail requests to `/run/himalaya-mail-reader/reader.sock` after
+Authelia verifies both password and TOTP. Authelia serves its portal at
+`/authelia/` on the same host and keeps its session data in a dedicated,
+persistent Redis instance. The reader fetches mail through fixed-command SSH
+to the private executor.
 
 ## Install
 
-1. Verify that Seoul can reach the executor over the private network and
+1. After creating the service account, install the supplied
+   `himalaya-mail-reader.tmpfiles.conf` as
+   `/etc/tmpfiles.d/himalaya-mail-reader.conf` so the socket directory exists
+   before Docker restores the proxy at boot. Verify that Seoul can reach the executor over the private network and
    confirm the executor's SSH host key through a trusted channel. Generate a
    dedicated SSH key on Seoul under the `himalaya-reader` service account.
    Install its public key on the executor for the restricted, read-only reader
    command. Install the trusted host key in the reader account's `known_hosts`.
    Set the reader's SSH argv in `/srv/himalaya-mail/shared/reader.env` and start
    the reader with the service unit in this deployment package. Verify that its
-   port is bound to loopback and that only the intended mailboxes are visible.
+   socket exists in the `0700` directory `/run/himalaya-mail-reader` and
+   only the intended mailboxes are visible. The systemd unit keeps the
+   runtime directory in place across service restarts so Caddy's bind mount
+   can see the new socket.
    For multiple accounts, configure an SSH alias and restricted key per
    account, then use the named command map and optional bookmark compatibility
    setting in the [reader configuration](../reader/README.md#start-the-reader).
 2. On Seoul, set `READER_HOST` to the dedicated FQDN and `READER_AUTH_DIR` to an
-   absolute private directory outside the release and repository. Keep these
-   settings in a private environment file and pass it to `docker compose` with
-   `--env-file` for later invocations. If loopback ports conflict, adjust
-   `READER_PROXY_PORT`, `READER_AUTH_PORT`, and `READER_PORT` as needed.
-   Match `READER_PORT` in the reader environment and point the edge at
-   `READER_PROXY_PORT`. Use a dedicated hostname whose DNS and certificate you
-   control.
+   absolute private directory outside the release and repository. Set
+   `READER_PROXY_UID` and `READER_PROXY_GID` to the host service account's
+   numeric IDs, available from `id himalaya-reader`. Keep these settings in
+   a private environment file and pass it to `docker compose` with
+   `--env-file` for later invocations. If the Caddy loopback port conflicts,
+   adjust `READER_PROXY_PORT` and point the edge at that port. Use a
+   dedicated hostname whose DNS and certificate you control.
 3. From `/srv/himalaya-mail/current/deploy/seoul`, use a private terminal to
    create the secrets and generate the password hash. In this example
    `READER_HOST` and `READER_AUTH_DIR` are exported in the shell.
@@ -55,9 +62,15 @@ through fixed-command SSH to the private executor.
        password: '<Argon2id hash>'
    ```
 
-4. Validate the configuration and start the stack.
+4. Give the Authelia container's runtime UID read access to its private files.
+   For rootful Docker without user namespace remapping, make these three
+   files root-owned with mode `0400`. Adjust ownership for the mapped runtime
+   UID if Docker remaps container users. Validate the configuration and start
+   the stack.
 
    ```sh
+   sudo chown root:root "$READER_AUTH_DIR/session" "$READER_AUTH_DIR/storage" "$READER_AUTH_DIR/users.yml"
+   sudo chmod 0400 "$READER_AUTH_DIR/session" "$READER_AUTH_DIR/storage" "$READER_AUTH_DIR/users.yml"
    docker compose config --quiet
    docker compose run --rm --no-deps authelia authelia config validate \
        --config /etc/authelia/reader.yml --config.experimental.filters=template
@@ -94,7 +107,7 @@ through fixed-command SSH to the private executor.
 ## Verify and operate
 
 Run `python3 deploy/seoul/smoke_auth.py` from the repo on a Linux Docker host.
-It uses a synthetic loopback reader and a dedicated disposable Compose
+It uses a synthetic Unix-socket reader and a dedicated disposable Compose
 project. It checks failed unauthenticated and password-only access, forwarded
 identity headers, protected routes, cookie flags, the remembered expiry,
 restart persistence, logout and administrator revocation. The synthetic check

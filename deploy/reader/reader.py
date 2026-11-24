@@ -6,15 +6,19 @@ import html
 import json
 import os
 import selectors
+import stat
 import subprocess
 import time
 from html.parser import HTMLParser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from socketserver import ThreadingMixIn, UnixStreamServer
+from threading import BoundedSemaphore
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
 
 PAGE_SIZE = 25
 TIMEOUT = 30
+MAX_CONCURRENT_REQUESTS = 3
 MAX_RESPONSE = 20 * 1024 * 1024
 CSS = Path(__file__).with_name("reader.css")
 TOOLS = {"mailbox_list", "envelope_list", "message_read", "attachment_download"}
@@ -393,21 +397,86 @@ def load_accounts(environ):
     raise ValueError("HIMALAYA_READER_MCP_COMMAND must be a non-empty JSON argv array")
 
 
+class BoundedThreadingMixIn(ThreadingMixIn):
+    daemon_threads = True
+
+    def __init__(self, *args):
+        self.request_slots = BoundedSemaphore(MAX_CONCURRENT_REQUESTS)
+        super().__init__(*args)
+
+    def process_request(self, request, client_address):
+        if not self.request_slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self.request_slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.request_slots.release()
+
+
+class LoopbackHTTPServer(BoundedThreadingMixIn, HTTPServer):
+    pass
+
+
+class UnixHTTPServer(BoundedThreadingMixIn, UnixStreamServer):
+    def __init__(self, path, handler):
+        if not path.is_absolute():
+            raise ValueError("the reader socket path must be absolute")
+        directory = path.parent.lstat()
+        if (not stat.S_ISDIR(directory.st_mode) or stat.S_IMODE(directory.st_mode) != 0o700
+                or directory.st_uid != os.geteuid()):
+            raise ValueError("the socket directory must be private (mode 0700) and owned by the reader")
+        self.socket_path = path
+        self.bound = False
+        super().__init__(str(path), handler)
+
+    def server_bind(self):
+        previous_umask = os.umask(0o177)
+        try:
+            super().server_bind()
+            self.bound = True
+        finally:
+            os.umask(previous_umask)
+
+    def server_close(self):
+        super().server_close()
+        if self.bound:
+            self.socket_path.unlink(missing_ok=True)
+            self.bound = False
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--port", type=int, default=8080)
+    listener = parser.add_mutually_exclusive_group()
+    listener.add_argument("--port", type=int, default=8080, help="TCP loopback port")
+    listener.add_argument("--unix-socket", type=Path, help="Unix socket in a private directory")
     parser.add_argument("--host-header", action="append", default=[],
                         help="add an exact Host value allowed from an authenticated proxy")
     args = parser.parse_args()
     try:
         accounts, legacy_account = load_accounts(os.environ)
+        if args.unix_socket:
+            server = UnixHTTPServer(args.unix_socket, ReaderHandler)
+            hosts = {"localhost"}
+        else:
+            server = LoopbackHTTPServer(("127.0.0.1", args.port), ReaderHandler)
+            hosts = {"127.0.0.1", f"127.0.0.1:{server.server_port}", "localhost",
+                     f"localhost:{server.server_port}"}
+    except OSError as error:
+        parser.error(f"cannot open reader listener: {error}")
     except ValueError as error:
         parser.error(str(error))
-    with HTTPServer(("127.0.0.1", args.port), ReaderHandler) as server:
+    with server:
         server.accounts = accounts
         server.legacy_account = legacy_account
-        server.hosts = {"127.0.0.1", f"127.0.0.1:{server.server_port}", "localhost",
-                        f"localhost:{server.server_port}", *args.host_header}
+        server.hosts = hosts.union(args.host_header)
         server.serve_forever()
 
 

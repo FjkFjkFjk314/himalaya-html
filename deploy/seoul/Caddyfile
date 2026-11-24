@@ -13,7 +13,7 @@ http://{$READER_HOST}:{$READER_PROXY_PORT} {
 
 	@portal path /authelia /authelia/*
 	handle @portal {
-		reverse_proxy 127.0.0.1:{$READER_AUTH_PORT} {
+		reverse_proxy unix//run/himalaya-auth/auth.sock {
 			header_up X-Forwarded-Proto https
 		}
 	}
@@ -23,13 +23,13 @@ http://{$READER_HOST}:{$READER_PROXY_PORT} {
 		path / /message /attachment /reader.css
 	}
 	handle @reader {
-		forward_auth 127.0.0.1:{$READER_AUTH_PORT} {
+		forward_auth unix//run/himalaya-auth/auth.sock {
 			uri /authelia/api/authz/forward-auth
 			header_up X-Forwarded-Proto https
 		}
 
-		reverse_proxy 127.0.0.1:{$READER_PORT} {
-			header_up Host 127.0.0.1:{$READER_PORT}
+		reverse_proxy unix//run/himalaya-mail-reader/reader.sock {
+			header_up Host localhost
 			header_up -Cookie
 			header_up -Authorization
 			header_down Cache-Control "no-store"

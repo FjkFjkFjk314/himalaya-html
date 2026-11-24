@@ -1,7 +1,7 @@
 theme: auto
 
 server:
-  address: tcp://:9091/authelia
+  address: 'unix:///run/himalaya-auth/auth.sock?umask=0000&path=authelia'
   endpoints:
     authz:
       forward-auth:

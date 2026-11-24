@@ -21,6 +21,10 @@ change: docker-mail-mcp-web
 
 新 capability `mail-web` SHALL 提供账号切换、文件夹、列表、搜索、正文和附件读取。页面、API 及附件 SHALL 在本机验证二步登录和账号权限。读取 SHALL 保持现有邮件状态，并隔离不可信 HTML 与附件。Web 的公开入口 SHALL 仅开放阅读功能。
 
+### Requirement: 记住此浏览器 30 天
+
+`mail-web` SHALL 提供默认关闭的「记住此浏览器 30 天」选项。在用户主动选择并通过密码和 TOTP 后，本机 SHALL 保留仅用于只读邮件网页的持久会话。同一浏览器配置文件在完整登录后的 30 天内可凭有效会话访问页面、API 和附件，并继续接受账号权限检查。重复访问 SHALL 不延长有效期。退出和服务端撤销 SHALL 使会话失效。到期、清除 Cookie 或换用没有有效会话的浏览器后，用户 SHALL 重新完成密码和 TOTP 验证。审批和 MCP SHALL 继续使用独立授权。
+
 ### Requirement: 五类邮箱的部署验收
 
 `packaging` SHALL 提供通用 IMAP/SMTP、Gmail API、Microsoft 365/Outlook 的 Microsoft Graph、QQ 和 163 的脱敏配置说明和实测矩阵。验收 SHALL 区分真实账号已测、后端不支持和待实测。公开自动化 SHALL 使用合成邮件与账号。

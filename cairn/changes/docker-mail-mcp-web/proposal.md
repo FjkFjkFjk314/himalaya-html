@@ -25,6 +25,7 @@ created: 2026-11-24
 - 建议用 Tailscale Grants 限定公网服务器节点只能连接本机指定的 Web TLS 端口，用 HAProxy `mode tcp`（或现有等效转发器）透传。公网上仅发布 Web 入口。公网服务器持有其自身的网络身份，邮件域名的 TLS 私钥、二步验证状态、邮件数据和邮箱凭证由本机持有。公网服务器能观察连接元数据，本机离线时公网网页不可用。
 - 在本机签发、续期并加载域名证书。建议用 DNS-01，DNS 凭证注入本机 ACME 组件，验证续期后自动加载。可将同级登录子域名经同一个 TCP 端口透传，由本机按域名选择路由。DNS 保持直连模式。
 - 建议用本机反向代理集成 Authelia，以密码加 TOTP 作为首版二步验证。只允许配置的用户访问，保护页面、API、附件和直接访问的地址。会话设置过期时间、退出和安全 Cookie，应用端不可通过 Docker 容器端口或伪造转发头绕开鉴权。
+- 登录时提供默认不勾选的「记住此浏览器 30 天」。用户主动选择并完成密码和 TOTP 后，同一浏览器配置文件在接下来 30 天内再次访问只读邮件网页时，可直接进入，无需再次输入密码或 TOTP，关闭并重新打开浏览器后也有效。期限从本次完整登录起算，访问不会延长。主动退出、会话被撤销、清除 Cookie 或到期后，下次访问须重新完成两步登录。审批和 MCP 继续使用各自的授权。
 - Web 使用 Rust 服务端渲染和少量前端代码。提供账号切换、文件夹、分页、搜索、正文和附件下载。所有读接口按账号、文件夹、消息 ID 定位，保留已读状态。纯文本转义，HTML 净化后放入隔离的 sandbox iframe，默认阻止远程资源和外部跟踪。下载强制使用附件响应和 `nosniff`，邮件响应禁止缓存。
 
 ## MCP 与发送策略
@@ -45,5 +46,6 @@ created: 2026-11-24
 - [Tailscale Grants](https://tailscale.com/docs/features/access-control/grants)
 - [Let's Encrypt ACME 验证类型](https://letsencrypt.org/docs/challenge-types/)
 - [Authelia 双因素访问策略](https://www.authelia.com/configuration/security/access-control/)
+- [Authelia 会话与记住登录配置](https://www.authelia.com/configuration/session/introduction/)
 - [MCP 2025-06-18 传输规范](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports)
 - [Docker Compose secrets](https://docs.docker.com/compose/how-tos/use-secrets/)

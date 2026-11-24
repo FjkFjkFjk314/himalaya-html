@@ -11,6 +11,9 @@ Himalaya is an application, the top layer of the Pimalaya stack. It writes no pr
 ### Requirement: A binary, and a library for himalaya-tui
 Himalaya SHALL build as a binary, and as a library whose only consumer is himalaya-tui: src/lib.rs declaring the modules, src/main.rs holding `main` alone over it. The library SHALL carry no semver promise of its own, the contract being the CLI's grammar and its versioned `--json` output, and a consumer SHALL pin it by git revision. A user needing the protocol or storage logic still reaches for the io-* library that owns it (io-imap, io-jmap, io-gmail, io-msgraph, io-smtp, io-managesieve, io-maildir, io-mbox, io-pimdir).
 
+### Requirement: Local Docker CLI executor
+The Compose `executor` profile SHALL provide a `himalaya` service built from the locked Cargo dependencies. It SHALL run CLI commands as UID and GID 10001 with a read-only root filesystem, store writable account state under `/var/lib/himalaya` on a named volume, and publish no ports. The deployment example SHALL mount the operator's external configuration read-only and supply IMAP and SMTP passwords through service-scoped secret files. The Docker build context SHALL use an allowlist of build inputs.
+
 ### Requirement: Feature-gated backends
 Every backend SHALL sit behind its own cargo feature (`imap`, `smtp`, `jmap`, `gmail`, `msgraph`, `maildir`, `mbox`, `pimdir`), so a build ships only the protocols it needs. A protocol command and its backend adapter compile only when its feature is on. The `imap`, `smtp` and `sieve` features SHALL enable the `scram` feature of io-imap, io-smtp and io-managesieve, so `scram-sha-256` runs wherever the configuration takes it.
 

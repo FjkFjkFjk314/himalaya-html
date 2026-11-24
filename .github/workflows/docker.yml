@@ -1,0 +1,55 @@
+name: Docker
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  credential-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Scan new commits with redacted output
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          base=${PR_BASE:-$PUSH_BEFORE}
+          if [[ -z "$base" || "$base" == 0000000000000000000000000000000000000000 ]] ||
+             ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            base=$(git merge-base HEAD "refs/remotes/origin/$DEFAULT_BRANCH" || true)
+            if [[ "$base" == "$(git rev-parse HEAD)" ]]; then
+              base=$(git rev-parse --verify HEAD^ 2>/dev/null || true)
+            fi
+          fi
+          range=HEAD
+          if [[ -n "$base" ]]; then
+            range="$base..HEAD"
+          fi
+          docker run --rm --network none \
+            --mount "type=bind,source=$PWD/.git,target=/repo/.git,readonly" \
+            --env GIT_CONFIG_COUNT=1 --env GIT_CONFIG_KEY_0=safe.directory \
+            --env GIT_CONFIG_VALUE_0=/repo \
+            ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
+            git --redact=100 --no-banner --ignore-gitleaks-allow \
+            --log-opts="--diff-merges=first-parent $range" /repo
+
+  synthetic-mail:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Exercise the container with synthetic mail
+        run: python3 tests/docker/smoke.py

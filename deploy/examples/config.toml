@@ -1,0 +1,21 @@
+[accounts.imap-smtp]
+default = true
+email = "alice@example.invalid"
+imap.server = "imap.example.invalid"
+imap.sasl.plain.username = "alice@example.invalid"
+imap.sasl.plain.password.command = ["cat", "/run/secrets/imap_password"]
+smtp.server = "smtp.example.invalid"
+smtp.sasl.plain.username = "alice@example.invalid"
+smtp.sasl.plain.password.command = ["cat", "/run/secrets/smtp_password"]
+
+# Enable the API accounts after providing an access token through a secret
+# command. A deployment-managed helper can refresh the token before printing it.
+# [accounts.gmail]
+# email = "gmail-user@example.invalid"
+# gmail.user-id = "me"
+# gmail.auth.token.command = ["cat", "/run/secrets/gmail_access_token"]
+
+# [accounts.graph]
+# email = "graph-user@example.invalid"
+# msgraph.user-id = "me"
+# msgraph.auth.token.command = ["cat", "/run/secrets/graph_access_token"]

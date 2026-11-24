@@ -47,3 +47,18 @@ fabric.properties
 
 ## Others
 .metadata/
+
+# Local Docker deployment material
+.env
+.env.*
+/compose.override.yaml
+/compose.override.yml
+/config.toml
+/deploy/local/
+/deploy/private/
+/deploy/secrets/
+/secrets/
+*.pem
+*.key
+*.p12
+*.pfx

@@ -1,0 +1,28 @@
+services:
+  himalaya:
+    profiles: [executor]
+    build:
+      context: .
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:mode=1777
+    volumes:
+      - himalaya-state:/var/lib/himalaya
+    networks:
+      - mail-egress
+
+volumes:
+  himalaya-state:
+
+networks:
+  mail-egress:
+  # Reserved for the separate entry-point services in deployment overlays.
+  web:
+    internal: true
+  mcp:
+    internal: true
+  approval:
+    internal: true

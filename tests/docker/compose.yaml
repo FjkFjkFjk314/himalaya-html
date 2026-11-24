@@ -1,0 +1,29 @@
+services:
+  himalaya:
+    volumes:
+      - ./tests/docker/fixtures:/fixtures:ro
+
+  smtp:
+    image: python:3.13-slim
+    command: ["python", "/fixtures/smtp_sink.py"]
+    init: true
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:mode=1777
+    volumes:
+      - ./tests/docker/fixtures:/fixtures:ro
+    networks:
+      - mail-egress
+    healthcheck:
+      test: ["CMD", "python", "/fixtures/smtp_sink.py", "--check"]
+      interval: 1s
+      timeout: 2s
+      retries: 20
+
+networks:
+  mail-egress:
+    internal: true

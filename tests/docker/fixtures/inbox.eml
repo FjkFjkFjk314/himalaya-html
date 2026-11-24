@@ -1,0 +1,9 @@
+From: sender@example.test
+To: himalaya@example.test
+Date: Tue, 24 Nov 2026 10:00:00 +0000
+Subject: Synthetic inbox message
+Message-ID: <smoke-inbox@example.test>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+
+This message lives only in the Compose smoke test.

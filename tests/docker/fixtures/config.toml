@@ -1,0 +1,5 @@
+[accounts.smoke]
+default = true
+email = "himalaya@example.test"
+maildir.root = "/var/lib/himalaya/mail"
+smtp.server = "smtp://smtp:2525"

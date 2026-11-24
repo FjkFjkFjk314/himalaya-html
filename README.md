@@ -136,6 +136,8 @@ Himalaya manages your mail from the command line: every command prints JSON for 
   The binary lands at target/release/himalaya.
 </details>
 
+For a local container, see the [Docker Compose deployment guide](deploy/README.md).
+
 ## Configuration
 
 A TOML configuration is loaded from every existing path among the following, each one deep-merged on top of the ones before:

@@ -1,0 +1,18 @@
+services:
+  himalaya:
+    volumes:
+      - type: bind
+        source: ${HIMALAYA_DEPLOY_DIR:?set HIMALAYA_DEPLOY_DIR to an absolute path outside the repository}/config.toml
+        target: /run/himalaya/config.toml
+        read_only: true
+        bind:
+          create_host_path: false
+    secrets:
+      - imap_password
+      - smtp_password
+
+secrets:
+  imap_password:
+    file: ${HIMALAYA_DEPLOY_DIR:?set HIMALAYA_DEPLOY_DIR to an absolute path outside the repository}/secrets/imap_password
+  smtp_password:
+    file: ${HIMALAYA_DEPLOY_DIR:?set HIMALAYA_DEPLOY_DIR to an absolute path outside the repository}/secrets/smtp_password

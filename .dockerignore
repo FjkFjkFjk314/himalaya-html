@@ -1,0 +1,8 @@
+# Keep deployment files, fixtures, and credentials outside the build context.
+**
+!Cargo.toml
+!Cargo.lock
+!build.rs
+!src/
+src/**
+!src/**/*.rs

@@ -11,7 +11,9 @@ change: docker-mail-mcp-web
 
 - [x] 在根目录新增 `Dockerfile`、`compose.yaml`、`.dockerignore`。用 Cargo.lock 构建，运行容器使用非 root 用户。Compose 默认不发布邮箱执行器或应用内部端口，分别定义 Web、MCP 和审批入口的网络边界。
 - [x] 在 `deploy/examples/` 增加占位账号配置和 secret command 示例。将真实配置、OAuth token、认证数据库、证书、TLS 私钥和测试邮箱参数放到仓库外。为 build context 与 Git 加排除规则，为公共 CI 加入脱敏的凭证扫描和合成邮箱测试。
-- [ ] 验证 `docker compose config --quiet`、镜像构建、持久卷重启及文件权限。在合成账号验证结构化读取与 SMTP 投递。运行 `cargo test --locked --test mcp` 核对现有 MCP 合约。
+- [x] 验证 `docker compose config --quiet`、镜像构建、持久卷重启及文件权限。在合成账号验证结构化读取与 SMTP 投递。运行 `cargo test --locked --test mcp` 核对现有 MCP 合约。
+
+2026-11-24 已通过[容器收发测试与凭证扫描](https://github.com/FjkFjkFjk314/himalaya-html/actions/runs/45340405411)。本地 `cargo test --locked` 通过 875 项、忽略 25 项，其中 MCP 集成测试通过 25 项。
 
 ## 2. 多账号 MCP 与权限
 

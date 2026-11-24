@@ -27,7 +27,11 @@ class SmtpSession(socketserver.StreamRequestHandler):
                 sender = argument[5:].decode()
                 recipients = []
                 self.reply(b"250 Sender accepted")
-            elif command == b"RCPT" and sender is not None and argument.upper().startswith(b"TO:"):
+            elif (
+                command == b"RCPT"
+                and sender is not None
+                and argument.upper().startswith(b"TO:")
+            ):
                 recipients.append(argument[3:].decode())
                 self.reply(b"250 Recipient accepted")
             elif command == b"DATA" and recipients:

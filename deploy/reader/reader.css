@@ -10,8 +10,9 @@
 body { background: var(--paper); color: var(--ink); margin: 0; }
 a { color: var(--accent); }
 header, .layout { padding-inline: max(1.25rem, calc((100% - 68rem) / 2)); }
-header { border-bottom: 1px solid var(--line); padding-block: 1.15rem; }
-header a { color: inherit; font: 600 1.45rem Georgia, serif; text-decoration: none; }
+header { display: flex; align-items: center; gap: .75rem 1.5rem; flex-wrap: wrap; border-bottom: 1px solid var(--line); padding-block: 1.15rem; }
+header > a { color: inherit; font: 600 1.45rem Georgia, serif; text-decoration: none; }
+.accounts { display: flex; flex-wrap: wrap; gap: .25rem; padding: 0; border: 0; }
 .layout { display: grid; grid-template-columns: 12rem minmax(0, 1fr); gap: 2rem; }
 nav { padding-block: 1.5rem; }
 nav a { display: block; padding: .4rem .7rem; border-radius: .3rem; overflow-wrap: anywhere; text-decoration: none; }

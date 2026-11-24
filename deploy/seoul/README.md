@@ -17,6 +17,9 @@ through fixed-command SSH to the private executor.
    Set the reader's SSH argv in `/srv/himalaya-mail/shared/reader.env` and start
    the reader with the service unit in this deployment package. Verify that its
    port is bound to loopback and that only the intended mailboxes are visible.
+   For multiple accounts, configure an SSH alias and restricted key per
+   account, then use the named command map and optional bookmark compatibility
+   setting in the [reader configuration](../reader/README.md#start-the-reader).
 2. On Seoul, set `READER_HOST` to the dedicated FQDN and `READER_AUTH_DIR` to an
    absolute private directory outside the release and repository. Keep these
    settings in a private environment file and pass it to `docker compose` with

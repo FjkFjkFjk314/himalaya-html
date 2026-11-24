@@ -12,7 +12,7 @@ from http.server import HTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
-from reader import BackendError, ReaderHandler, call_mcp
+from reader import BackendError, ReaderHandler, call_mcp, load_accounts
 
 ROOT = Path(__file__).resolve().parents[2]
 GATEWAY = ROOT / "deploy/mcp/gateway.py"
@@ -44,20 +44,33 @@ class ReaderTest(unittest.TestCase):
         fixture = tempfile.TemporaryDirectory()
         self.addCleanup(fixture.cleanup)
         root = Path(fixture.name)
-        inbox = root / "mail" / "inbox"
-        for sub in ("cur", "new", "tmp"):
-            (inbox / sub).mkdir(parents=True)
-        self.message = inbox / "cur" / "m1:2,"
-        self.message.write_bytes(MESSAGE.replace("\n", "\r\n").encode())
         config = root / "config.toml"
-        config.write_text('[accounts.reader]\nemail = "reader@example.org"\n'
-                          f'maildir.root = "{root / "mail"}"\n')
+        self.commands = {}
+        self.messages = {}
+        with config.open("w") as stream:
+            for account in ("school", "163"):
+                inbox = root / account / "inbox"
+                for sub in ("cur", "new", "tmp"):
+                    (inbox / sub).mkdir(parents=True)
+                message = inbox / "cur" / "m1:2,"
+                self.messages[account] = message
+                if account == "school":
+                    self.message = message
+                    fixture_content = MESSAGE
+                else:
+                    fixture_content = MESSAGE.replace("Safety", "Other account").replace(
+                        "alert('attachment')", "alert('163')")
+                message.write_bytes(fixture_content.replace("\n", "\r\n").encode())
+                stream.write(f'[accounts."{account}"]\nemail = "reader@example.org"\n'
+                             f'maildir.root = "{inbox.parent}"\n')
+                self.commands[account] = [
+                    sys.executable, str(GATEWAY), "--read-only", "--", str(BINARY),
+                    "-c", str(config), "-a", account, "--log-level", "off", "mcp",
+                ]
         server = HTTPServer(("127.0.0.1", 0), ReaderHandler)
         server.hosts = {f"127.0.0.1:{server.server_port}"}
-        server.command = [
-            sys.executable, str(GATEWAY), "--read-only", "--", str(BINARY),
-            "-c", str(config), "-a", "reader", "--log-level", "off", "mcp",
-        ]
+        server.accounts = {None: self.commands["school"]}
+        server.legacy_account = None
         self.server = server
         thread = threading.Thread(target=server.serve_forever)
         thread.start()
@@ -129,7 +142,93 @@ class ReaderTest(unittest.TestCase):
 
     def test_limit_rejects_large_executor_output(self):
         with patch("reader.MAX_RESPONSE", 5), self.assertRaises(BackendError):
-            call_mcp(self.server.command, [("mailbox_list", {})])
+            call_mcp(self.commands["school"], [("mailbox_list", {})])
+
+    def test_named_accounts_keep_navigation_and_attachments_scoped(self):
+        self.server.accounts = self.commands
+        status, _, body = self.request("/")
+        self.assertEqual(status, 200, body)
+        self.assertIn(b'>Safety &lt;check&gt;<', body)
+        self.assertIn(b'href="/?account=school" aria-current="true"', body)
+        self.assertIn(b'href="/?account=163"', body)
+
+        second = self.messages["163"]
+        for index in range(2, 28):
+            second.with_name(f"m{index}:2,").write_bytes(second.read_bytes())
+        status, _, body = self.request("/?account=163")
+        self.assertEqual(status, 200, body)
+        self.assertIn(b'>Other account &lt;check&gt;<', body)
+        folder_link = html.unescape(re.search(rb'<nav aria-label="Folders"><a href="([^"]+)',
+                                             body)[1].decode())
+        self.assertIn("account=163&mailbox=", folder_link)
+        status, _, folder = self.request(folder_link)
+        self.assertEqual(status, 200, folder)
+        self.assertIn(b'>Other account &lt;check&gt;<', folder)
+        older_link = html.unescape(re.search(rb'<a href="([^"]+)">Older</a>', folder)[1].decode())
+        self.assertIn("account=163", older_link)
+        status, _, body = self.request(older_link)
+        self.assertEqual(status, 200, body)
+        self.assertRegex(body, rb'href="/\?account=163&amp;mailbox=[^"]+&amp;page=1">Newer')
+        self.assertRegex(body, rb'/message\?account=163&amp;mailbox=[^"]+&amp;message=')
+
+        status, _, body = self.request("/message?account=163&mailbox=inbox&message=m1")
+        self.assertEqual(status, 200, body)
+        self.assertIn(b'Other account &lt;check&gt;', body)
+        self.assertIn(b'href="/?account=163&amp;mailbox=inbox">Back to folder', body)
+        attachment = html.unescape(re.search(rb'href="(/attachment[^"]+)', body)[1].decode())
+        self.assertIn("account=163", attachment)
+        status, _, body = self.request(attachment)
+        self.assertEqual(status, 200, body)
+        self.assertIn(b"alert('163')", body)
+        status, _, body = self.request(attachment.replace("account=163", "account=school"))
+        self.assertEqual(status, 200, body)
+        self.assertIn(b"alert('attachment')", body)
+
+    def test_named_accounts_reject_missing_unknown_and_ambiguous_aliases(self):
+        self.server.accounts = self.commands
+        with patch("reader.call_mcp") as call:
+            for url in ("/?mailbox=inbox", "/?account=", "/?account=unknown",
+                        "/?account=school&account=school", "/?account=school&account=163",
+                        "/message?message=m1", "/attachment?message=m1&part=3"):
+                with self.subTest(url=url):
+                    self.assertEqual(self.request(url)[0], 400)
+            call.assert_not_called()
+
+    def test_legacy_bookmarks_use_only_the_configured_alias(self):
+        self.server.accounts = {"163": self.commands["163"], "school": self.commands["school"]}
+        self.server.legacy_account = "school"
+        status, _, body = self.request("/")
+        self.assertEqual(status, 200, body)
+        self.assertIn(b"Other account &lt;check&gt;", body)
+        status, _, body = self.request("/message?mailbox=inbox&message=m1")
+        self.assertEqual(status, 200, body)
+        self.assertIn(b"Safety &lt;check&gt;", body)
+        self.assertIn(b"account=school&amp;mailbox=inbox", body)
+        self.assertEqual(self.request("/message?account=&message=m1")[0], 400)
+
+
+class ReaderConfigTest(unittest.TestCase):
+    def test_loads_named_and_legacy_accounts(self):
+        self.assertEqual(load_accounts({"HIMALAYA_READER_MCP_COMMAND": '["himalaya","mcp"]'}),
+                         ({None: ["himalaya", "mcp"]}, None))
+        accounts, legacy = load_accounts({
+            "HIMALAYA_READER_ACCOUNTS": '{"school":["a"],"163":["b"]}',
+            "HIMALAYA_READER_LEGACY_ACCOUNT": "school",
+        })
+        self.assertEqual(list(accounts.items()), [("school", ["a"]), ("163", ["b"])])
+        self.assertEqual(legacy, "school")
+
+    def test_rejects_invalid_or_ambiguous_configuration(self):
+        for raw in ('{}', '[]', '{"school":[]}', '{"school":"ssh"}', '{"":["ssh"]}',
+                    '{"school":["a"],"school":["b"]}'):
+            with self.subTest(raw=raw), self.assertRaisesRegex(ValueError, "HIMALAYA_READER_ACCOUNTS"):
+                load_accounts({"HIMALAYA_READER_ACCOUNTS": raw})
+        with self.assertRaisesRegex(ValueError, "only one"):
+            load_accounts({"HIMALAYA_READER_ACCOUNTS": '{"school":["a"]}',
+                           "HIMALAYA_READER_MCP_COMMAND": '["b"]'})
+        with self.assertRaisesRegex(ValueError, "HIMALAYA_READER_LEGACY_ACCOUNT"):
+            load_accounts({"HIMALAYA_READER_ACCOUNTS": '{"school":["a"]}',
+                           "HIMALAYA_READER_LEGACY_ACCOUNT": "unknown"})
 
 
 if __name__ == "__main__":

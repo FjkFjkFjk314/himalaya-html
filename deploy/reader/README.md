@@ -1,6 +1,6 @@
 # Read-only mail reader
 
-The reader serves one fixed account using Python 3.9+ and the Himalaya stdio
+The reader serves configured accounts using Python 3.9+ and the Himalaya stdio
 MCP protocol. Run it on the proxy host. It listens only on IPv4 loopback and
 relies on an authenticating reverse proxy to protect all routes, including
 direct message and attachment URLs. Keep the loopback listener private to the
@@ -9,17 +9,34 @@ reader and trusted proxy operators. For the two-factor deployment, see
 
 ## Start the reader
 
-Configure the following environment variable on the service. The value is a
-JSON array of arguments.
+For a single account, set `HIMALAYA_READER_MCP_COMMAND` to a JSON array of
+arguments.
 
 ```sh
 export HIMALAYA_READER_MCP_COMMAND='["ssh","-T","-o","BatchMode=yes","-o","StrictHostKeyChecking=yes","himalaya-reader-executor"]'
 python3 deploy/reader/reader.py --port 8080 --host-header mail.example.com
 ```
 
+For named accounts, use `HIMALAYA_READER_ACCOUNTS` as the service's sole
+command configuration. Each key appears as a label in the account switcher.
+Each value is the argument array for that account's fixed read-only command.
+The first alias opens on the bare home page.
+
+```sh
+export HIMALAYA_READER_ACCOUNTS='{"school":["ssh","-T","-o","BatchMode=yes","-o","StrictHostKeyChecking=yes","school-reader-executor"],"163":["ssh","-T","-o","BatchMode=yes","-o","StrictHostKeyChecking=yes","163-reader-executor"]}'
+export HIMALAYA_READER_LEGACY_ACCOUNT=school
+```
+
+Set the optional `HIMALAYA_READER_LEGACY_ACCOUNT` when migrating bookmarks
+from a single-account installation. It maps URLs without an account parameter
+to that alias, except for the bare home page. New mailbox, message and download
+links always carry the selected alias in named mode. Every authenticated user
+of the reader can switch to any configured account.
+
 Configure the SSH host alias to use the dedicated private executor address,
 an independently verified host key, and a dedicated key kept outside the
-repository. On the executor, restrict that key to the fixed-account read-only
+repository. Set up a distinct SSH key and forced command for each account.
+On the executor, restrict each key to the matching fixed-account read-only
 MCP command. A typical native executor command looks like this.
 
 ```sh

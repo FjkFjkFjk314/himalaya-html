@@ -1,4 +1,4 @@
-"""Serve a fixed account from a trusted, read-only Himalaya MCP command."""
+"""Serve mail from trusted, fixed-account, read-only Himalaya MCP commands."""
 
 import argparse
 import base64
@@ -138,7 +138,9 @@ def esc(value):
     return html.escape(str(value if value is not None else ""))
 
 
-def href(path="/", **params):
+def href(path="/", *, account=None, **params):
+    if account is not None:
+        params = {"account": account, **params}
     return esc(path + ("?" + urlencode(params) if params else ""))
 
 
@@ -147,24 +149,32 @@ def addresses(items):
                      else item["email"] for item in items)
 
 
-def render_page(folders, mailbox, title, content):
+def render_page(folders, mailbox, title, content, account, accounts):
     nav = []
     for folder in folders:
         is_current = (folder["id"] == mailbox or
                       (mailbox == "inbox" and folder.get("role") == "inbox"))
         selected = ' aria-current="page"' if is_current else ""
-        nav.append(f'<a href="{href(mailbox=folder["id"])}"{selected}>{esc(folder["name"])}</a>')
+        link = href(account=account, mailbox=folder["id"])
+        nav.append(f'<a href="{link}"{selected}>{esc(folder["name"])}</a>')
+    switcher = ""
+    if account is not None:
+        links = []
+        for alias in accounts:
+            selected = ' aria-current="true"' if alias == account else ""
+            links.append(f'<a href="{href(account=alias)}"{selected}>{esc(alias)}</a>')
+        switcher = f'<nav class="accounts" aria-label="Accounts">{"".join(links)}</nav>'
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{esc(title)} | Himalaya</title><link rel="stylesheet" href="/reader.css"></head>
-<body><header><a href="/">Himalaya</a></header><div class="layout">
+<body><header><a href="{href(account=account)}">Himalaya</a>{switcher}</header><div class="layout">
 <nav aria-label="Folders">{"".join(nav)}</nav><main>{content}</main></div></body></html>"""
 
 
-def render_envelopes(data, mailbox, page, folder_name):
+def render_envelopes(data, mailbox, page, folder_name, account):
     rows = []
     for row in data["envelopes"]:
-        link = href("/message", mailbox=mailbox, message=row["id"])
+        link = href("/message", account=account, mailbox=mailbox, message=row["id"])
         subject = esc(row.get("subject") or "(No subject)")
         sender = esc(addresses(row.get("from", [])))
         sent = esc((row.get("date") or "")[:10])
@@ -176,13 +186,14 @@ def render_envelopes(data, mailbox, page, folder_name):
     content += '<ul class="messages">' + "".join(rows) + "</ul>" if rows else "<p>No messages.</p>"
     links = []
     if page > 1:
-        links.append(f'<a href="{href(mailbox=mailbox, page=page - 1)}">Newer</a>')
+        links.append(f'<a href="{href(account=account, mailbox=mailbox, page=page - 1)}">Newer</a>')
     if token := data.get("nextPage"):
-        links.append(f'<a href="{href(mailbox=mailbox, page=page + 1, cursor=token)}">Older</a>')
+        link = href(account=account, mailbox=mailbox, page=page + 1, cursor=token)
+        links.append(f'<a href="{link}">Older</a>')
     return content + f'<div class="pagination">{"".join(links)}</div>'
 
 
-def render_message(message, mailbox, message_id):
+def render_message(message, mailbox, message_id, account):
     headers = message.get("headers", {})
     body = message.get("text")
     if body is None and message.get("html"):
@@ -190,7 +201,7 @@ def render_message(message, mailbox, message_id):
         parser.feed(message["html"])
         parser.close()
         body = "".join(parser.chunks).strip()
-    content = f'<a href="{href(mailbox=mailbox)}">Back to folder</a>'
+    content = f'<a href="{href(account=account, mailbox=mailbox)}">Back to folder</a>'
     content += f'<h1>{esc(message.get("subject") or "(No subject)")}</h1><dl>'
     for label, field in (("From", "from"), ("To", "to"), ("Cc", "cc")):
         if items := headers.get(field):
@@ -201,7 +212,8 @@ def render_message(message, mailbox, message_id):
     links = []
     for part in message.get("parts", []):
         if part["role"] in {"attachment", "inline"}:
-            link = href("/attachment", mailbox=mailbox, message=message_id, part=part["id"])
+            link = href("/attachment", account=account, mailbox=mailbox,
+                        message=message_id, part=part["id"])
             label = esc(part.get("filename") or f'Part {part["id"]}')
             links.append(f'<li><a href="{link}">{label}</a></li>')
     if links:
@@ -256,8 +268,24 @@ class ReaderHandler(BaseHTTPRequestHandler):
                 return
             if len(target.query) > 8192:
                 raise ValueError("query exceeds limit")
-            query = {key: values[0] for key, values in
-                     parse_qs(target.query, max_num_fields=8).items()}
+            fields = parse_qs(target.query, keep_blank_values=True, max_num_fields=8)
+            accounts = self.server.accounts
+            if "account" in fields:
+                aliases = fields.pop("account")
+                if len(aliases) != 1 or aliases[0] not in accounts:
+                    raise ValueError("invalid account")
+                account = aliases[0]
+            elif None in accounts:
+                account = None
+            elif target.path == "/" and not target.query:
+                account = next(iter(accounts))
+            elif self.server.legacy_account is not None:
+                account = self.server.legacy_account
+            else:
+                raise ValueError("missing account")
+            command = accounts[account]
+            query = {key: next((value for value in values if value), "")
+                     for key, values in fields.items() if any(values)}
             mailbox = query.get("mailbox", "inbox")
             arguments = {"mailbox": mailbox}
             if target.path == "/":
@@ -279,20 +307,21 @@ class ReaderHandler(BaseHTTPRequestHandler):
                 if not (part := query.get("part")):
                     raise ValueError("missing part")
                 arguments["attachment-id"] = part
-                self.download(arguments)
+                self.download(command, arguments)
                 return
-            folders, result = call_mcp(self.server.command, [("mailbox_list", {}), (tool, arguments)])
+            folders, result = call_mcp(command, [("mailbox_list", {}), (tool, arguments)])
             folders = structured(folders, "mailboxes")["mailboxes"]
             folder_name = next((folder["name"] for folder in folders if folder["id"] == mailbox),
                                "Inbox" if mailbox == "inbox" else mailbox)
             if tool == "envelope_list":
                 title = folder_name
-                content = render_envelopes(structured(result, "envelopes"), mailbox, page, folder_name)
+                content = render_envelopes(structured(result, "envelopes"),
+                                           mailbox, page, folder_name, account)
             else:
                 message = structured(result)
                 title = message.get("subject") or "(No subject)"
-                content = render_message(message, mailbox, message_id)
-            self.send_payload(200, render_page(folders, mailbox, title, content),
+                content = render_message(message, mailbox, message_id, account)
+            self.send_payload(200, render_page(folders, mailbox, title, content, account, accounts),
                               "text/html; charset=utf-8")
         except ValueError:
             self.send_payload(400, "Invalid request")
@@ -301,8 +330,8 @@ class ReaderHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError, TimeoutError):
             pass
 
-    def download(self, arguments):
-        result, = call_mcp(self.server.command, [("attachment_download", arguments)])
+    def download(self, command, arguments):
+        result, = call_mcp(command, [("attachment_download", arguments)])
         metadata = structured(result)
         try:
             resource, = [item["resource"] for item in result["content"] if item["type"] == "resource"]
@@ -319,6 +348,51 @@ class ReaderHandler(BaseHTTPRequestHandler):
         self.send_payload(200, binary, "application/octet-stream", disposition)
 
 
+def valid_command(command):
+    return isinstance(command, list) and bool(command) and all(
+        isinstance(arg, str) and arg and "\0" not in arg for arg in command
+    )
+
+
+def unique_aliases(pairs):
+    accounts = dict(pairs)
+    if len(accounts) != len(pairs):
+        raise ValueError("duplicate account alias")
+    return accounts
+
+
+def load_accounts(environ):
+    aliases = environ.get("HIMALAYA_READER_ACCOUNTS")
+    legacy = environ.get("HIMALAYA_READER_MCP_COMMAND")
+    legacy_account = environ.get("HIMALAYA_READER_LEGACY_ACCOUNT")
+    if aliases is not None:
+        if legacy is not None:
+            raise ValueError("set only one reader account configuration variable")
+        try:
+            accounts = json.loads(aliases, object_pairs_hook=unique_aliases)
+        except (ValueError, RecursionError):
+            accounts = None
+        if not isinstance(accounts, dict) or not accounts or not all(
+            alias.isprintable() and alias.strip() and valid_command(command)
+            for alias, command in accounts.items()
+        ):
+            raise ValueError(
+                "HIMALAYA_READER_ACCOUNTS must map unique aliases to non-empty JSON argv arrays"
+            )
+        if legacy_account is not None and legacy_account not in accounts:
+            raise ValueError("HIMALAYA_READER_LEGACY_ACCOUNT must name a configured account")
+        return accounts, legacy_account
+    if legacy_account is not None:
+        raise ValueError("HIMALAYA_READER_LEGACY_ACCOUNT requires HIMALAYA_READER_ACCOUNTS")
+    try:
+        command = json.loads(legacy if legacy is not None else "null")
+        if valid_command(command):
+            return {None: command}, None
+    except (ValueError, RecursionError):
+        pass
+    raise ValueError("HIMALAYA_READER_MCP_COMMAND must be a non-empty JSON argv array")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=8080)
@@ -326,15 +400,12 @@ def main():
                         help="add an exact Host value allowed from an authenticated proxy")
     args = parser.parse_args()
     try:
-        command = json.loads(os.environ.get("HIMALAYA_READER_MCP_COMMAND", "null"))
-        if not isinstance(command, list) or not command or not all(
-            isinstance(arg, str) and arg and "\0" not in arg for arg in command
-        ):
-            raise ValueError
-    except ValueError:
-        parser.error("HIMALAYA_READER_MCP_COMMAND must be a non-empty JSON argv array")
+        accounts, legacy_account = load_accounts(os.environ)
+    except ValueError as error:
+        parser.error(str(error))
     with HTTPServer(("127.0.0.1", args.port), ReaderHandler) as server:
-        server.command = command
+        server.accounts = accounts
+        server.legacy_account = legacy_account
         server.hosts = {"127.0.0.1", f"127.0.0.1:{server.server_port}", "localhost",
                         f"localhost:{server.server_port}", *args.host_header}
         server.serve_forever()

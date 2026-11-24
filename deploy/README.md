@@ -44,3 +44,5 @@ volumes. Keep trace logging off when using account credentials.
 With Docker Compose 2.24.4 or later, run `python3 tests/docker/smoke.py` to build
 the image and test with synthetic mail and an SMTP collector on an isolated
 Docker network.
+
+For two local accounts, see the [Chinese MCP installation and usage guide](mcp/README.zh-CN.md).

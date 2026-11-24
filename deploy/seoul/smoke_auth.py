@@ -126,7 +126,7 @@ def exercise(directory, reader_port):
         headers, body = request(
             "/authelia/api/firstfactor",
             data={
-                "username": "reader",
+                "username": "admin",
                 "password": password,
                 "keepMeLoggedIn": remember,
                 "targetURL": ORIGIN + "/",
@@ -166,7 +166,7 @@ def exercise(directory, reader_port):
         digest = re.search(r"\$argon2id\$\S+", digest_output).group(0)
         users.write_text(
             "users:\n"
-            "  reader:\n"
+            "  admin:\n"
             "    displayname: Synthetic Reader\n"
             "    email: reader@example.com\n"
             f"    password: '{digest}'\n"
@@ -180,7 +180,7 @@ def exercise(directory, reader_port):
         ready()
         compose(
             "exec", "-T", "authelia", "authelia",
-            "storage", "user", "totp", "generate", "reader",
+            "storage", "user", "totp", "generate", "admin",
             "--secret", base64.b32encode(seed).decode().rstrip("="), *authelia_flags,
             output=True,
         )
@@ -192,8 +192,8 @@ def exercise(directory, reader_port):
         request(
             "/attachment",
             headers={
-                "Remote-User": "reader",
-                "X-Forwarded-User": "reader",
+                "Remote-User": "admin",
+                "X-Forwarded-User": "admin",
                 "X-Forwarded-Host": "wrong.example.com",
                 "X-Forwarded-Proto": "http",
                 "X-Forwarded-Uri": "/authelia/",

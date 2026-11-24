@@ -42,11 +42,11 @@ through fixed-command SSH to the private executor.
 
    Create `"$READER_AUTH_DIR/users.yml"` with mode `0600`. Enter the Argon2id
    output in the quoted password field. The allowlist uses the literal
-   username `reader`.
+   username `admin`.
 
    ```yaml
    users:
-     reader:
+     admin:
        displayname: Mail reader
        email: reader@example.com
        password: '<Argon2id hash>'
@@ -67,7 +67,7 @@ through fixed-command SSH to the private executor.
    and server time before testing TOTP.
 
    ```sh
-   docker compose exec authelia authelia storage user totp generate reader \
+   docker compose exec authelia authelia storage user totp generate admin \
        --issuer 'Himalaya Mail' --config /etc/authelia/reader.yml \
        --config.experimental.filters=template
    ```

@@ -30,7 +30,7 @@ access_control:
   default_policy: deny
   rules:
     - domain: '{{ env "READER_HOST" }}'
-      subject: 'user:reader'
+      subject: 'user:admin'
       policy: two_factor
 
 session:

@@ -94,8 +94,9 @@ Run `python3 deploy/seoul/smoke_auth.py` from the repo on a Linux Docker host.
 It uses a synthetic loopback reader and a dedicated disposable Compose
 project. It checks failed unauthenticated and password-only access, forwarded
 identity headers, protected routes, cookie flags, the remembered expiry,
-restart persistence and logout. It does not exercise the public TLS edge or
-use a browser.
+restart persistence, logout and administrator revocation. The synthetic check
+connects directly to the loopback proxy. Use a real browser for public TLS
+and cookie behavior.
 
 Before publishing the site, verify the login flow in a fresh browser profile.
 Check that the remember option starts unchecked, attempt a direct attachment

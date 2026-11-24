@@ -208,10 +208,13 @@ def exercise(directory, reader_port):
         assert abs(cookie_expiry(ordinary) - time.time() - 3600) < 10
         request("/", cookie=ordinary.split(";", 1)[0], status=302)
 
-        pending = sign_in(password, remember=True).split(";", 1)[0]
+        pending = sign_in(password, remember=True)
+        pending_cookie = pending.split(";", 1)[0]
         for path in protected:
-            request(path, cookie=pending, status=302)
-        authenticated = complete_login(seed, pending)
+            request(path, cookie=pending_cookie, status=302)
+        time.sleep(2)
+        authenticated = complete_login(seed, pending_cookie)
+        assert cookie_expiry(authenticated) > cookie_expiry(pending)
         assert abs(cookie_expiry(authenticated) - time.time() - 30 * 86400) < 10
         cookie = authenticated.split(";", 1)[0]
         session_id = cookie.removeprefix(f"{COOKIE_NAME}=")
@@ -233,16 +236,20 @@ def exercise(directory, reader_port):
         # Put a duplicate session close to its deadline without waiting 30 days.
         expiring_id = secrets.token_hex(16)
         expiring_key = key.removesuffix(session_id) + expiring_id
-        assert redis("COPY", key, expiring_key) == "1"
+        assert redis("COPY", key, expiring_key, "REPLACE") == "1"
         assert redis("PEXPIRE", expiring_key, "3000") == "1"
         expiring_cookie = f"{COOKIE_NAME}={expiring_id}"
         request("/attachment", cookie=expiring_cookie)
         time.sleep(3)
         for path in protected:
             request(path, cookie=expiring_cookie, status=302)
+        assert redis("COPY", key, expiring_key, "REPLACE") == "1"
         request("/authelia/api/logout", cookie=cookie, data={"targetURL": ORIGIN + "/"})
         for path in protected:
             request(path, cookie=cookie, status=302)
+        request("/attachment", cookie=expiring_cookie)
+        assert redis("FLUSHDB", "SYNC") == "OK"
+        request("/attachment", cookie=expiring_cookie, status=302)
         compose("stop", "authelia")
         request("/attachment", cookie=cookie, status=502)
         print("Seoul loopback authentication checks passed")

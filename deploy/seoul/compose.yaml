@@ -1,0 +1,60 @@
+name: himalaya-seoul-reader
+
+services:
+  proxy:
+    image: caddy:2.11.9-alpine@sha256:003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0
+    network_mode: host
+    environment:
+      READER_HOST: ${READER_HOST:?set the dedicated HTTPS reader hostname}
+      READER_PORT: ${READER_PORT:-8080}
+      READER_PROXY_PORT: ${READER_PROXY_PORT:-18080}
+      READER_AUTH_PORT: ${READER_AUTH_PORT:-19091}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    restart: unless-stopped
+    depends_on:
+      - authelia
+  authelia:
+    image: authelia/authelia:4.39.28@sha256:bd97cff4fcbf715b5ff1f9ae286afbe6033afce385302520b0368122d43a6f54
+    command: [authelia, --config, /etc/authelia/reader.yml, --config.experimental.filters=template]
+    environment:
+      READER_HOST: ${READER_HOST:?set the dedicated HTTPS reader hostname}
+      AUTHELIA_SESSION_SECRET_FILE: /run/secrets/session
+      AUTHELIA_STORAGE_ENCRYPTION_KEY_FILE: /run/secrets/storage
+    volumes:
+      - ./authelia.yml:/etc/authelia/reader.yml:ro
+      - ${READER_AUTH_DIR:?set an absolute private directory}/users.yml:/etc/authelia/users.yml:ro
+      - auth-state:/config
+    secrets:
+      - session
+      - storage
+    ports:
+      - "127.0.0.1:${READER_AUTH_PORT:-19091}:9091"
+    networks:
+      - default
+      - sessions
+    restart: unless-stopped
+    depends_on:
+      - redis
+  redis:
+    image: redis:8.4.3-alpine@sha256:52e68c6542d1b658a207ba63e7545963ec7cde6c7efc8948108edfa7e339ff73
+    command: [redis-server, --protected-mode, "no", --save, "", --appendonly, "yes", --appendfsync, always]
+    volumes:
+      - session-state:/data
+    networks:
+      - sessions
+    restart: unless-stopped
+
+networks:
+  sessions:
+    internal: true
+
+volumes:
+  auth-state:
+  session-state:
+
+secrets:
+  session:
+    file: ${READER_AUTH_DIR:?set an absolute private directory}/session
+  storage:
+    file: ${READER_AUTH_DIR:?set an absolute private directory}/storage

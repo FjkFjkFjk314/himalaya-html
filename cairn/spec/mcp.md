@@ -86,3 +86,6 @@ No tool SHALL take a local path: `attachment download` SHALL be exposed only wit
 
 ### Requirement: The server bounds the part a tool reads
 The same `--max-attachment-size` SHALL bound the decoded size of the part a tool reads. A larger part SHALL be refused before it is encoded, with the code `attachment-too-large` and `isError: true`.
+
+### Requirement: Deployment stdio gateway for a fixed account
+The deployment wrapper SHALL intersect native tool discovery and calls with its server-side allowlist. Its read-only mode SHALL expose mailbox, envelope, account capability, message and attachment reads. Its management mode SHALL additionally allow adding and removing the seen and flagged flags. Reading through either mode SHALL preserve read state. Each process SHALL use the backend command and account chosen at launch.

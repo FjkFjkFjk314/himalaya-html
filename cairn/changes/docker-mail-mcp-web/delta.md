@@ -7,7 +7,7 @@ change: docker-mail-mcp-web
 
 ### Requirement: 本机容器部署与凭证边界
 
-`packaging` SHALL 提供可复建的本机 Docker Compose 部署。邮箱连接、邮件状态和应用持久数据 SHALL 留在本机。所有真实邮件与凭证 SHALL 存放在 Git 之外，并仅挂载给使用它们的组件。公网服务器 SHALL 仅转发 Web 的加密 TCP 流量。邮件域名的私钥和 Web 登录状态 SHALL 留在本机。
+`packaging` SHALL 提供可复建的本机 Docker Compose 部署。邮箱连接、邮件状态和应用持久数据 SHALL 留在本机。所有真实邮件与凭证 SHALL 存放在 Git 之外，并仅挂载给使用它们的组件。在透传部署中，公网服务器 SHALL 仅转发 Web 的加密 TCP 流量，域名私钥和 Web 登录状态留在本机。在首尔托管前端的部署中，独立站点 SHALL 在云端验证浏览器会话，通过受限私有链路访问本机只读邮件接口。邮箱凭证和 AI 写入入口 SHALL 留在本机。
 
 ### Requirement: 私有多账号 MCP
 
@@ -19,11 +19,11 @@ change: docker-mail-mcp-web
 
 ### Requirement: 双因素保护的只读邮件网页
 
-新 capability `mail-web` SHALL 提供账号切换、文件夹、列表、搜索、正文和附件读取。页面、API 及附件 SHALL 在本机验证二步登录和账号权限。读取 SHALL 保持现有邮件状态，并隔离不可信 HTML 与附件。Web 的公开入口 SHALL 仅开放阅读功能。
+新 capability `mail-web` SHALL 提供账号切换、文件夹、列表、搜索、正文和附件读取。页面、API 及附件 SHALL 由前端站点验证二步登录和账号权限。读取 SHALL 保持现有邮件状态，并隔离不可信 HTML 与附件。Web 的公开入口 SHALL 仅开放阅读功能。
 
 ### Requirement: 记住此浏览器 30 天
 
-`mail-web` SHALL 提供默认关闭的「记住此浏览器 30 天」选项。在用户主动选择并通过密码和 TOTP 后，本机 SHALL 保留仅用于只读邮件网页的持久会话。同一浏览器配置文件在完整登录后的 30 天内可凭有效会话访问页面、API 和附件，并继续接受账号权限检查。重复访问 SHALL 不延长有效期。退出和服务端撤销 SHALL 使会话失效。到期、清除 Cookie 或换用没有有效会话的浏览器后，用户 SHALL 重新完成密码和 TOTP 验证。审批和 MCP SHALL 继续使用独立授权。
+`mail-web` SHALL 提供默认关闭的「记住此浏览器 30 天」选项。在用户主动选择并通过密码和 TOTP 后，站点身份服务 SHALL 保留仅用于只读邮件网页的持久会话。同一浏览器配置文件在完整登录后的 30 天内可凭有效会话访问页面、API 和附件，并继续接受账号权限检查。重复访问 SHALL 不延长有效期。退出和服务端撤销 SHALL 使会话失效。到期、清除 Cookie 或换用没有有效会话的浏览器后，用户 SHALL 重新完成密码和 TOTP 验证。审批和 MCP SHALL 继续使用独立授权。
 
 ### Requirement: 五类邮箱的部署验收
 

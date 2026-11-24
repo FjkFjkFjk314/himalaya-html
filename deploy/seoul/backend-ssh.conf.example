@@ -1,0 +1,13 @@
+Host himalaya-readonly
+    # Replace with the private address reachable from the Seoul reader.
+    HostName backend.example.invalid
+    User REPLACE_WITH_EXECUTOR_ACCOUNT
+    IdentityFile /srv/himalaya-mail/shared/backend_ed25519
+    IdentitiesOnly yes
+    UserKnownHostsFile /srv/himalaya-mail/shared/backend_known_hosts
+    StrictHostKeyChecking yes
+    BatchMode yes
+    ForwardAgent no
+    ClearAllForwardings yes
+    RequestTTY no
+    ConnectTimeout 8

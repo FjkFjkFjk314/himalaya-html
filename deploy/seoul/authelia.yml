@@ -1,0 +1,55 @@
+theme: auto
+
+server:
+  address: tcp://:9091/authelia
+  endpoints:
+    authz:
+      forward-auth:
+        implementation: ForwardAuth
+        authn_strategies:
+          - name: CookieSession
+
+log:
+  level: warn
+
+totp:
+  issuer: Himalaya Mail
+
+webauthn:
+  disable: true
+
+authentication_backend:
+  refresh_interval: disable
+  password_reset:
+    disable: true
+  file:
+    path: /etc/authelia/users.yml
+    watch: true
+
+access_control:
+  default_policy: deny
+  rules:
+    - domain: '{{ env "READER_HOST" }}'
+      subject: 'user:reader'
+      policy: two_factor
+
+session:
+  name: himalaya_reader_session
+  same_site: lax
+  inactivity: 15m
+  expiration: 1h
+  remember_me: 30d
+  cookies:
+    - domain: '{{ env "READER_HOST" }}'
+      authelia_url: 'https://{{ env "READER_HOST" }}/authelia/'
+      default_redirection_url: 'https://{{ env "READER_HOST" }}/'
+  redis:
+    host: redis
+
+storage:
+  local:
+    path: /config/auth.sqlite3
+
+notifier:
+  filesystem:
+    filename: /config/notification.txt

@@ -89,3 +89,8 @@ jobs:
           done
       - name: Test a build without SMTP
         run: nix develop -c cargo test --locked --no-default-features --features rustls-ring,maildir
+      - name: Exercise the deployment MCP gateway and read-only browser reader
+        run: |
+          test -x target/debug/himalaya
+          python3 -B -m unittest discover -s deploy/mcp -v
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s deploy/reader -v

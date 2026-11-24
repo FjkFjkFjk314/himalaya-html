@@ -1,0 +1,47 @@
+{
+	admin off
+	auto_https off
+}
+
+http://{$READER_HOST}:{$READER_PROXY_PORT} {
+	bind 127.0.0.1
+
+	@authz path /authelia/api/authz /authelia/api/authz/* /authelia/api/verify
+	handle @authz {
+		respond 404
+	}
+
+	@portal path /authelia /authelia/*
+	handle @portal {
+		reverse_proxy 127.0.0.1:{$READER_AUTH_PORT} {
+			header_up X-Forwarded-Proto https
+		}
+	}
+
+	@reader {
+		method GET HEAD
+		path / /message /attachment /reader.css
+	}
+	handle @reader {
+		forward_auth 127.0.0.1:{$READER_AUTH_PORT} {
+			uri /authelia/api/authz/forward-auth
+			header_up X-Forwarded-Proto https
+		}
+
+		reverse_proxy 127.0.0.1:{$READER_PORT} {
+			header_up Host 127.0.0.1:{$READER_PORT}
+			header_up -Cookie
+			header_up -Authorization
+			header_down Cache-Control "no-store"
+		}
+	}
+
+	handle {
+		respond 404
+	}
+}
+
+http://:{$READER_PROXY_PORT} {
+	bind 127.0.0.1
+	respond 421
+}

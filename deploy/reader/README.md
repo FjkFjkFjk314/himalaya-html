@@ -82,13 +82,17 @@ The tests exercise HTTP through the read-only MCP gateway and use
 
 ## Background inbox synchronization
 
-Synchronized mode serves the first inbox page from a backend memory cache. A
+The reader orders a folder by sent time before paginating and shows timestamps in Beijing time. The 新邮件 and 已读 labels reflect the mailbox read flag. Reading through the website preserves that flag.
+
+Synchronized mode serves the first inbox page from the backend cache. A
 worker refreshes each account on startup and then on a staggered schedule
 (default interval 60 seconds, page size 25). The displayed time is the last
 successful inbox refresh. After a failed update, the reader keeps the previous
 complete page. The refresh button queues work for the selected account. Opening
 a message reads it on demand and may reuse that account's recent preview for
-five minutes. Attachments and subsequent folder pages remain on demand.
+five minutes. The private socket directory also stores the last complete date-ordered
+inbox index for each account so a restart can serve cached pages. Opening another
+folder builds its listing on demand. Attachments are fetched on demand.
 
 1. On the executor host, create a private directory owned by the worker and a
    private JSON file mapping each account alias to its fixed **read-only** MCP
@@ -98,6 +102,10 @@ five minutes. Attachments and subsequent folder pages remain on demand.
    ```sh
    python3 -B sync_backend.py --socket "$SYNC_SOCKET" --accounts "$ACCOUNT_MAP" --interval 60
    ```
+
+   If an account has a separate read-only envelope source for the date index,
+   pass its alias-to-argv mapping with `--date-accounts FILE`. These commands
+   must implement the same MCP envelope listing contract for that account.
 
 2. For each account, configure the trusted transport to run
    `sync_bridge.py --socket "$SYNC_SOCKET" --account "$FIXED_ALIAS"` on the

@@ -1,12 +1,14 @@
-"""Keep per-account inbox snapshots behind a private read-only MCP socket."""
+"""Serve inbox snapshots and date-ordered folders behind a private read-only MCP socket."""
 
 from __future__ import annotations
 
 import argparse
 from collections import OrderedDict
-from concurrent.futures import Future
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import datetime
 import fcntl
+import hashlib
 import json
 import math
 import os
@@ -15,6 +17,7 @@ import signal
 import socketserver
 import stat
 from subprocess import TimeoutExpired
+from tempfile import NamedTemporaryFile
 from threading import BoundedSemaphore, Condition, Event, Thread
 import time
 
@@ -32,12 +35,19 @@ CONNECTION_TIMEOUT = 5
 MAX_REQUESTS = 32
 RETRY_DELAY = 10
 MIN_REFRESH_GAP = 5
+DATE_BATCH_SIZE = 100
+DATE_OVERRIDE_BATCH_SIZE = 1000
+DATE_LOAD_TIMEOUT = 60
+DATE_LIST_WAIT = 4
+DATE_FOLDERS = 24
+MAX_DATE_CACHE = 24 * 1024 * 1024
+
+LIST_PARAMETERS = {"mailbox": str, "page": int, "page-size": int, "page-token": str}
 
 PARAMETERS = {
     "mailbox_list": ({"counts": bool}, set()),
     "envelope_list": ({
-        "has-attachment": bool, "mailbox": str, "page": int, "page-size": int,
-        "page-token": str, "recipient": str,
+        **LIST_PARAMETERS, "has-attachment": bool, "recipient": str,
     }, set()),
     "message_read": ({"mailbox": str, "message-id": str}, {"message-id"}),
     "attachment_download": (
@@ -46,6 +56,9 @@ PARAMETERS = {
     ),
     "reader_snapshot": ({}, set()),
     "reader_refresh": ({}, set()),
+    "reader_date_list": (LIST_PARAMETERS, set()),
+    "reader_date_snapshot": ({}, set()),
+    "reader_date_refresh": ({}, set()),
 }
 
 
@@ -79,6 +92,27 @@ def checked_list(result, key):
     return data
 
 
+def envelope_date(item):
+    try:
+        instant = datetime.fromisoformat(item["date"])
+        if instant.utcoffset() is not None:
+            return instant.timestamp()
+    except (KeyError, TypeError, ValueError, OverflowError, OSError):
+        pass
+    return -math.inf
+
+
+@dataclass
+class DateFolder:
+    envelopes: list | None = None
+    size: int = 0
+    last_success: int | None = None
+    due: float = 0
+    manual_after: float = 0
+    refreshing: bool = False
+    failed: bool = False
+
+
 @dataclass
 class Account:
     command: list
@@ -93,9 +127,13 @@ class Account:
 
 
 class Backend:
-    def __init__(self, commands, interval=60, executor=None):
+    def __init__(self, commands, interval=60, executor=None, date_executor=None, date_directory=None,
+                 date_commands=None):
         self.interval = interval
         self.executor = executor if executor is not None else call_mcp
+        self.date_executor = date_executor if date_executor is not None else self.execute_date
+        self.date_directory = date_directory
+        self.date_commands = date_commands if date_commands is not None else {}
         start = time.monotonic()
         spacing = min(5, interval / len(commands))
         self.accounts = {alias: Account(command, start + index * spacing)
@@ -105,8 +143,15 @@ class Backend:
         self.inflight = {}
         self.bodies = OrderedDict()
         self.cache_size = 0
+        self.date_folders = OrderedDict(
+            ((alias, "inbox"), DateFolder(due=account.due)) for alias, account in self.accounts.items()
+        )
+        self.date_size = 0
+        self.date_workers = ThreadPoolExecutor(max_workers=2, thread_name_prefix="date-refresh")
         self.stopping = False
         self.worker = Thread(target=self.run_refreshes, name="inbox-refresh")
+        for key, folder in self.date_folders.items():
+            self.restore_date_folder(key, folder)
 
     def __enter__(self):
         self.worker.start()
@@ -117,6 +162,7 @@ class Backend:
             self.stopping = True
             self.condition.notify_all()
         self.worker.join()
+        self.date_workers.shutdown(cancel_futures=True)
 
     def run_refreshes(self):
         while True:
@@ -126,9 +172,13 @@ class Backend:
                 state = min(self.accounts.values(), key=lambda account: account.due)
                 now = time.monotonic()
                 self.expire_bodies(now)
+                for alias in self.accounts:
+                    self.date_folder(alias, "inbox")
                 if state.due > now:
-                    wake_at = min((entry[0] for entry in self.bodies.values()), default=state.due)
-                    self.condition.wait(min(state.due, wake_at) - now)
+                    body_due = min((entry[0] for entry in self.bodies.values()), default=state.due)
+                    date_due = min((folder.due for key, folder in self.date_folders.items()
+                                    if key[1] == "inbox" and not folder.refreshing), default=state.due)
+                    self.condition.wait(max(0, min(state.due, body_due, date_due) - now))
                     continue
                 state.running = True
                 state.queued = False
@@ -178,6 +228,188 @@ class Backend:
     def discard(self, key):
         self.cache_size -= self.bodies.pop(key)[2]
 
+    def discard_date_folder(self, *, skip=None):
+        for key, folder in self.date_folders.items():
+            if key != skip and key[1] != "inbox" and not folder.refreshing:
+                self.date_size -= self.date_folders.pop(key).size
+                return True
+        return False
+
+    def date_folder(self, alias, mailbox, *, schedule=False, requested=False):
+        # Callers hold the condition while accessing cache state.
+        key = alias, mailbox
+        folder = self.date_folders.get(key)
+        if folder is None:
+            if len(self.date_folders) >= DATE_FOLDERS and not self.discard_date_folder():
+                raise BackendError("date listings are busy")
+            folder = self.date_folders[key] = DateFolder()
+        self.date_folders.move_to_end(key)
+        now = time.monotonic()
+        start = requested and folder.envelopes is None and not folder.failed
+        due = folder.manual_after if schedule or start else folder.due
+        if not self.stopping and not folder.refreshing and now >= due:
+            folder.refreshing = True
+            self.date_workers.submit(self.load_date_folder, key, folder)
+        return folder
+
+    def load_date_folder(self, key, folder):
+        envelopes = None
+        size = 0
+        try:
+            envelopes, size = self.collect_date_folder(*key)
+        except (BackendError, OSError, TimeoutExpired, TypeError, AttributeError, ValueError, RecursionError):
+            envelopes = None
+        with self.condition:
+            now = time.monotonic()
+            if envelopes is not None:
+                while self.date_size - folder.size + size > MAX_DATE_CACHE:
+                    if not self.discard_date_folder(skip=key):
+                        envelopes = None
+                        break
+            folder.refreshing = False
+            folder.failed = envelopes is None
+            if envelopes is not None:
+                self.date_size += size - folder.size
+                folder.envelopes = envelopes
+                folder.size = size
+                last_success = folder.last_success = int(time.time())
+            folder.manual_after = now + (RETRY_DELAY if folder.failed else MIN_REFRESH_GAP)
+            folder.due = now + (min(self.interval, RETRY_DELAY) if folder.failed else self.interval)
+            self.condition.notify_all()
+        if envelopes is not None and key[1] == "inbox":
+            self.persist_date_folder(key, envelopes, last_success)
+
+    def date_path(self, key):
+        if self.date_directory is not None:
+            alias, _mailbox = key
+            digest = hashlib.sha256(encode(
+                [key, self.accounts[alias].command, self.date_commands.get(alias)]
+            )).hexdigest()
+            return self.date_directory / f"date-{digest}.json"
+        return None
+
+    def restore_date_folder(self, key, folder):
+        path = self.date_path(key)
+        if path is None:
+            return
+        try:
+            with path.open("rb") as persisted:
+                raw = persisted.read(MAX_DATE_CACHE + 1)
+            if len(raw) > MAX_DATE_CACHE:
+                return
+            data = checked_list(tool_result(decode(raw)), "envelopes")
+            envelopes = data["envelopes"]
+            last_success = data.get("last_success")
+            if not (type(last_success) is int and 0 < last_success <= time.time()
+                    and len({row["id"] for row in envelopes}) == len(envelopes)
+                    and self.date_size + len(raw) <= MAX_DATE_CACHE):
+                return
+            folder.size = len(raw)
+            self.date_size += folder.size
+            folder.envelopes = sorted(envelopes, key=envelope_date, reverse=True)
+            folder.last_success = last_success
+        except (BackendError, OSError, TypeError, AttributeError, ValueError, RecursionError):
+            return
+
+    def persist_date_folder(self, key, envelopes, last_success):
+        path = self.date_path(key)
+        if path is None:
+            return
+        pending = None
+        try:
+            with NamedTemporaryFile(dir=path.parent, delete=False) as output:
+                pending = Path(output.name)
+                output.write(encode({"envelopes": envelopes, "last_success": last_success}))
+            pending.replace(path)
+        except OSError:
+            if pending is not None:
+                try:
+                    pending.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+    @staticmethod
+    def execute_date(command, calls):
+        return call_mcp(command, calls, timeout=DATE_LOAD_TIMEOUT)
+
+    def collect_date_folder(self, alias, mailbox):
+        command = self.date_commands.get(alias)
+        batch_size = DATE_OVERRIDE_BATCH_SIZE if command is not None else DATE_BATCH_SIZE
+        command = command if command is not None else self.accounts[alias].command
+        envelopes = {}
+        size = 0
+        cursor = None
+        total = None
+        seen_cursors = set()
+        while True:
+            with self.condition:
+                if self.stopping:
+                    raise BackendError("mail backend is stopping")
+            args = {"mailbox": mailbox, "page-size": batch_size}
+            args.update({"page-token": cursor} if cursor else {"page": 1})
+            result, = self.date_executor(command, [("envelope_list", args)])
+            data = checked_list(result, "envelopes")
+            rows = data["envelopes"]
+            count = data.get("total")
+            if type(count) is int:
+                if total is not None and total != count:
+                    raise BackendError("folder changed during date listing")
+                total = count
+            size += len(encode(rows))
+            if size > MAX_DATE_CACHE:
+                raise BackendError("date listing exceeds cache limit")
+            for row in rows:
+                if row["id"] in envelopes:
+                    raise BackendError("overlapping date listing pages")
+                envelopes[row["id"]] = row
+            cursor = data.get("nextPage")
+            if not cursor:
+                if data.get("more") or (total is not None and len(envelopes) != total):
+                    raise BackendError("incomplete date listing")
+                return sorted(envelopes.values(), key=envelope_date, reverse=True), size
+            if not rows or not isinstance(cursor, str) or cursor in seen_cursors:
+                raise BackendError("invalid date listing cursor")
+            seen_cursors.add(cursor)
+
+    @staticmethod
+    def date_page(folder, page, size):
+        rows = folder.envelopes
+        if rows is None:
+            return {"envelopes": [], "errors": [], "refreshing": folder.refreshing,
+                    "failed": folder.failed}
+        stop = page * size
+        return {"envelopes": rows[stop - size:stop], "errors": [],
+                "nextPage": str(page + 1) if stop < len(rows) else None, "total": len(rows)}
+
+    def date_snapshot(self, alias, schedule=False):
+        with self.condition:
+            snapshot = self.snapshot(alias, schedule=schedule)
+            folder = self.date_folder(alias, "inbox", schedule=schedule, requested=True)
+            snapshot["envelopes"] = (
+                self.date_page(folder, 1, PAGE_SIZE) if folder.envelopes is not None else None
+            )
+            snapshot["last_success"] = folder.last_success
+            snapshot["refreshing"] = folder.refreshing
+            snapshot["failed"] = folder.failed
+            return snapshot
+
+    def list_by_date(self, alias, args):
+        page = args.get("page", 1)
+        if "page-token" in args:
+            if "page" in args:
+                raise BackendError("date listings take one page argument")
+            page = int(args["page-token"])
+            if not 1 <= page <= 1_000_000:
+                raise BackendError("invalid date page")
+        with self.condition:
+            folder = self.date_folder(alias, args.get("mailbox", "inbox"), requested=True)
+            if folder.envelopes is None:
+                self.condition.wait_for(
+                    lambda: not folder.refreshing or folder.envelopes is not None,
+                    timeout=DATE_LIST_WAIT,
+                )
+            return self.date_page(folder, page, args.get("page-size", PAGE_SIZE))
+
     def expire_bodies(self, now):
         for item, (expiry, _result, _size) in list(self.bodies.items()):
             if expiry <= now:
@@ -196,6 +428,10 @@ class Backend:
         self.condition.notify()
 
     def call(self, alias, name, args):
+        if name in {"reader_date_snapshot", "reader_date_refresh"}:
+            return tool_result(self.date_snapshot(alias, schedule=name == "reader_date_refresh"))
+        if name == "reader_date_list":
+            return tool_result(self.list_by_date(alias, args))
         if name in {"reader_snapshot", "reader_refresh"}:
             return tool_result(self.snapshot(alias, schedule=name == "reader_refresh"))
         state = self.accounts[alias]
@@ -397,12 +633,17 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--socket", required=True, type=Path)
     parser.add_argument("--accounts", required=True, type=Path)
+    parser.add_argument("--date-accounts", type=Path,
+                        help="optional read-only listing commands for configured account aliases")
     parser.add_argument("--interval", default=60, type=int)
     args = parser.parse_args()
     if args.interval < RETRY_DELAY:
         parser.error(f"--interval must be at least {RETRY_DELAY} seconds")
     try:
         commands = load_commands(args.accounts)
+        date_commands = load_commands(args.date_accounts) if args.date_accounts is not None else {}
+        if not date_commands.keys() <= commands.keys():
+            raise ValueError("date listing commands must use configured account aliases")
         parent = args.socket.parent.stat()
         if parent.st_uid != os.geteuid() or stat.S_IMODE(parent.st_mode) & 0o077:
             raise ValueError("the socket directory must be private and owned by the broker")
@@ -417,7 +658,8 @@ def main():
                 if previous.st_uid != os.geteuid() or not stat.S_ISSOCK(previous.st_mode):
                     raise ValueError("the socket path exists and is not an owned socket")
                 args.socket.unlink()
-            backend = Backend(commands, args.interval)
+            backend = Backend(commands, args.interval, date_directory=args.socket.parent,
+                              date_commands=date_commands)
             with Server(args.socket, backend) as server:
                 try:
                     stopping = Event()

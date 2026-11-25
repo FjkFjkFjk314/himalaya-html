@@ -27,9 +27,12 @@ h2 { font: 400 1.4rem Georgia, serif; }
 .messages li { border-top: 1px solid var(--line); }
 .messages a { color: inherit; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .15rem .75rem; padding: .7rem .5rem; text-decoration: none; }
 .messages a:hover { background: var(--tile); }
-.messages span { font-weight: 600; }
-.messages small { grid-column: 1; }
-.messages time { font-size: .82rem; grid-area: 1 / 2; }
+.messages .subject { font-weight: 450; }
+.messages .unread .subject { font-weight: 700; }
+.messages .sender { grid-column: 1; }
+.messages time, .messages .missing-date { font-size: .82rem; grid-area: 1 / 2; }
+.messages .read-status { grid-area: 2 / 2; justify-self: end; }
+.messages .unread .read-status { color: var(--accent); font-weight: 700; }
 .pagination { display: flex; gap: 1rem; margin-top: 1.25rem; }
 dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: .25rem .75rem; }
 dt { font-weight: 600; }
@@ -37,5 +40,7 @@ dd { margin: 0; }
 pre { border-top: 1px solid var(--line); font: inherit; padding-top: 1rem; white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (max-width: 42rem) {
   .layout { display: block; }
+  .messages time, .messages .missing-date { grid-area: 3 / 1 / 4 / 3; }
+  .messages .read-status { grid-area: 1 / 2; }
   nav { display: flex; flex-wrap: wrap; gap: .25rem; padding-block: .75rem; border-bottom: 1px solid var(--line); }
 }

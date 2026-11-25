@@ -11,6 +11,7 @@ import tempfile
 import threading
 import unittest
 from contextlib import closing
+from datetime import date
 from pathlib import Path
 from queue import Queue
 from unittest.mock import patch
@@ -109,6 +110,27 @@ class ReaderTest(unittest.TestCase):
         self.assertNotIn(b"https://example.org", body)
         self.assertNotIn(b"alert(", body)
         self.assertEqual(list(self.message.parent.glob("m1:2,*")), [self.message])
+
+    def test_sent_time_orders_across_pages_and_shows_read_flags(self):
+        self.message.unlink()
+        for number in range(1, 28):
+            flags = "S" if number == 1 else ""
+            # The oldest filename holds the newest instant.
+            day = 28 - number
+            stamp = date(2026, 11, day).strftime("%a, %d %b %Y 23:25:00 -0500")
+            self.message.with_name(f"m{number:02}:2,{flags}").write_text(
+                f"Date: {stamp}\nSubject: Message {number:02}\n\nBody")
+        status, _, first = self.request("/")
+        self.assertEqual(status, 200, first)
+        self.assertIn("2026-11-28 12:25:00 北京时间".encode(), first)
+        self.assertIn('class="read"'.encode(), first)
+        self.assertIn("已读".encode(), first)
+        self.assertIn("新邮件".encode(), first)
+        link = html.unescape(re.search(rb'<a href="([^"]+)">Older</a>', first)[1].decode())
+        status, _, second = self.request(link)
+        self.assertEqual(status, 200, second)
+        self.assertEqual(re.findall(rb'Message (\d\d)<', first + second),
+                         [f"{i:02}".encode() for i in range(1, 28)])
 
     def test_attachment_is_downloaded_as_opaque_bytes(self):
         status, headers, body = self.request("/attachment?mailbox=inbox&message=m1&part=3")
@@ -258,7 +280,7 @@ class ReaderSyncTest(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertIn("正在刷新收件箱".encode(), body)
             self.assertNotIn(b"No messages.", body)
-            self.assertIn(b'http-equiv="refresh" content="3;url=/?account=second"', body)
+            self.assertIn(b'http-equiv="refresh" content="3"', body)
             self.assertIn("form-action 'self'", headers["Content-Security-Policy"])
             self.assertEqual(headers["Referrer-Policy"], "same-origin")
             self.assertIn(b'<form action="/refresh" method="post">', body)
@@ -266,7 +288,7 @@ class ReaderSyncTest(unittest.TestCase):
             self.assertIn("立即刷新".encode(), body)
             self.assertIn("约每 90 秒自动刷新".encode(), body)
             self.assertIn(b'href="/?account=first"', body)
-            call.assert_called_with(["second-command"], [("reader_snapshot", {})])
+            call.assert_called_with(["second-command"], [("reader_date_snapshot", {})])
 
             status, _, body = self.request("/?account=second")
             self.assertIn("正在刷新收件箱".encode(), body)
@@ -289,13 +311,13 @@ class ReaderSyncTest(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertIn("form-action 'none'", headers["Content-Security-Policy"])
             call.assert_called_with(["second-command"], [("mailbox_list", {}), (
-                "envelope_list", {"mailbox": "inbox", "page-size": 25, "page-token": "page-2"},
+                "reader_date_list", {"mailbox": "inbox", "page-size": 25, "page": 2},
             )])
 
             status, _, body = self.request("/?account=first")
             self.assertIn("刷新失败".encode(), body)
             self.assertNotIn(b"No messages.", body)
-            call.assert_called_with(["first-command"], [("reader_snapshot", {})])
+            call.assert_called_with(["first-command"], [("reader_date_snapshot", {})])
 
     def test_same_origin_refresh_and_input_rejections(self):
         form = {"Origin": self.origin, "Content-Type": "application/x-www-form-urlencoded"}
@@ -322,7 +344,7 @@ class ReaderSyncTest(unittest.TestCase):
             status, headers, body = self.request("/refresh", "POST", "account=second", form)
             self.assertEqual((status, headers["Location"], body), (303, "/?account=second", b""))
             self.assertEqual(headers["Cache-Control"], "no-store")
-            call.assert_called_once_with(["second-command"], [("reader_refresh", {})])
+            call.assert_called_once_with(["second-command"], [("reader_date_refresh", {})])
 
 
 class FolderCacheTest(unittest.TestCase):

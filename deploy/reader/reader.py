@@ -28,14 +28,15 @@ MAX_RESPONSE = 20 * 1024 * 1024
 MAX_REFRESH_BODY = 4096
 CSS = Path(__file__).with_name("reader.css")
 TOOLS = {"mailbox_list", "envelope_list", "message_read", "attachment_download",
-         "reader_snapshot", "reader_refresh"}
+         "reader_snapshot", "reader_refresh", "reader_date_snapshot", "reader_date_refresh",
+         "reader_date_list", "envelope_search"}
 
 
 class BackendError(Exception):
     """The executor returned an unusable response."""
 
 
-def call_mcp(command, calls):
+def call_mcp(command, calls, *, timeout=TIMEOUT):
     """Send one batch of stdio requests with an overall time and size limit."""
     requests = [
         {"id": 0, "method": "initialize", "params": {
@@ -53,7 +54,7 @@ def call_mcp(command, calls):
     outgoing = "".join(json.dumps({"jsonrpc": "2.0", **request}) + "\n"
                        for request in requests).encode()
     output = bytearray()
-    deadline = time.monotonic() + TIMEOUT
+    deadline = time.monotonic() + timeout
     try:
         with subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                               stderr=subprocess.DEVNULL) as process:
@@ -204,7 +205,7 @@ def render_page(folders, mailbox, title, content, account, accounts, *, synced=F
             selected = ' aria-current="true"' if alias == account else ""
             links.append(f'<a href="{href(account=alias)}"{selected}>{esc(alias)}</a>')
         switcher = f'<nav class="accounts" aria-label="Accounts">{"".join(links)}</nav>'
-    refresh = f'<meta http-equiv="refresh" content="3;url={href(account=account)}">' if poll else ""
+    refresh = '<meta http-equiv="refresh" content="3">' if poll else ""
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{esc(title)} | Himalaya</title><link rel="stylesheet" href="/reader.css">{refresh}</head>
@@ -218,9 +219,23 @@ def render_envelopes(data, mailbox, page, folder_name, account, *, controls=""):
         link = href("/message", account=account, mailbox=mailbox, message=row["id"])
         subject = esc(row.get("subject") or "(No subject)")
         sender = esc(addresses(row.get("from", [])))
-        sent = esc((row.get("date") or "")[:10])
-        rows.append(f'<li><a href="{link}"><span>{subject}</span>'
-                    f'<small>{sender}</small><time>{sent}</time></a></li>')
+        try:
+            instant = datetime.fromisoformat(row["date"])
+            if instant.utcoffset() is None:
+                raise ValueError("missing timezone")
+            local = instant.astimezone(BEIJING_TIME)
+            sent = f'<time datetime="{local.isoformat()}">{local:%Y-%m-%d %H:%M:%S} 北京时间</time>'
+        except (KeyError, ValueError, TypeError, OverflowError):
+            sent = '<small class="missing-date">时间未知</small>'
+        flags = row.get("flags")
+        if isinstance(flags, list):
+            seen = any(isinstance(flag, dict) and flag.get("iana") == "seen" for flag in flags)
+            state, label = ("read", "已读") if seen else ("unread", "新邮件")
+        else:
+            state, label = "unknown", "状态未知"
+        rows.append(f'<li class="{state}"><a href="{link}"><span class="subject">{subject}</span>'
+                    f'<small class="sender">{sender}</small>{sent}'
+                    f'<small class="read-status" lang="zh-CN">{label}</small></a></li>')
     content = f'<h1>{esc(folder_name)}</h1>{controls}'
     if data.get("errors"):
         content += "<p>Some messages could not be listed.</p>"
@@ -402,7 +417,7 @@ class ReaderHandler(BaseHTTPRequestHandler):
             if account not in self.server.accounts:
                 raise ValueError("invalid account")
             command = self.server.accounts[account]
-            result, = call_mcp(command, [("reader_refresh", {})])
+            result, = call_mcp(command, [("reader_date_refresh", {})])
             structured(result)
             self.send_payload(303, "", location=href(account=account))
         except ValueError:
@@ -451,16 +466,19 @@ class ReaderHandler(BaseHTTPRequestHandler):
                 if not 1 <= page <= 1_000_000:
                     raise ValueError("invalid page")
                 if self.server.sync_origin and mailbox == "inbox" and page == 1 and not query.get("cursor"):
-                    result, = call_mcp(command, [("reader_snapshot", {})])
+                    result, = call_mcp(command, [("reader_date_snapshot", {})])
                     content = render_snapshot(structured(result), account, accounts)
                     self.send_payload(200, content, "text/html; charset=utf-8", refresh_form=True)
                     return
                 arguments["page-size"] = PAGE_SIZE
-                if cursor := query.get("cursor"):
+                if not self.server.sync_origin and (cursor := query.get("cursor")):
                     arguments["page-token"] = cursor
                 else:
                     arguments["page"] = page
-                tool = "envelope_list"
+                tool = "reader_date_list" if self.server.sync_origin else "envelope_search"
+                if tool == "envelope_search":
+                    arguments["sort"] = "newest-first"
+                    arguments["query"] = ""
             else:
                 if not (message_id := query.get("message")):
                     raise ValueError("missing message")
@@ -475,16 +493,23 @@ class ReaderHandler(BaseHTTPRequestHandler):
             folders, result = self.server.folder_cache.fetch(account, command, tool, arguments)
             folder_name = next((folder["name"] for folder in folders if folder["id"] == mailbox),
                                "Inbox" if mailbox == "inbox" else mailbox)
-            if tool == "envelope_list":
+            poll = False
+            if target.path == "/":
                 title = folder_name
-                content = render_envelopes(structured(result, "envelopes"),
-                                           mailbox, page, folder_name, account)
+                data = structured(result, "envelopes")
+                poll = data.get("refreshing") is True and not data["envelopes"]
+                if poll:
+                    content = f'<h1>{esc(folder_name)}</h1><p role="status">正在按邮件时间整理列表…</p>'
+                elif data.get("failed") and not data["envelopes"]:
+                    content = f'<h1>{esc(folder_name)}</h1><p role="status">邮件列表加载失败，请稍后刷新。</p>'
+                else:
+                    content = render_envelopes(data, mailbox, page, folder_name, account)
             else:
                 message = structured(result)
                 title = message.get("subject") or "(No subject)"
                 content = render_message(message, mailbox, message_id, account)
             content = render_page(folders, mailbox, title, content, account, accounts,
-                                  synced=bool(self.server.sync_origin))
+                                  synced=bool(self.server.sync_origin), poll=poll)
             self.send_payload(200, content, "text/html; charset=utf-8")
         except ValueError:
             self.send_payload(400, "Invalid request")

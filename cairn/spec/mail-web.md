@@ -19,3 +19,5 @@ In synchronized mode, the backend SHALL periodically refresh the folder list and
 
 
 The inbox SHALL display its account's last successful synchronization time in Beijing time (UTC+08:00) alongside the elapsed age of the displayed snapshot and its configured automatic refresh interval and offer an authenticated, same-origin manual refresh action. A pending or failed refresh SHALL preserve any previous complete snapshot and its success timestamp. Successful refreshes SHALL update the displayed list and timestamp. Concurrent refresh requests for the same account SHALL share a single backend job. Reading and refreshing the inbox SHALL preserve mail flags.
+
+The reader lists each folder by descending sent time before pagination and displays available timestamps in Beijing time. Read status reflects the mailbox's seen flag. An unread message is labelled 新邮件 and a seen message 已读. If flags are unavailable the reader displays 状态未知.

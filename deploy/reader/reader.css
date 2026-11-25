@@ -20,6 +20,9 @@ nav a:hover, nav a[aria-current] { background: var(--tile); }
 main { padding-block: 1.25rem 3rem; overflow-wrap: anywhere; }
 h1 { font: 400 clamp(1.75rem, 4vw, 2.5rem)/1.15 Georgia, serif; margin: .5rem 0 1.25rem; }
 h2 { font: 400 1.4rem Georgia, serif; }
+.sync-controls { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: .5rem 1rem; margin-bottom: 1rem; }
+.sync-controls p { margin: 0; font-size: .9rem; }
+.sync-controls button { background: var(--tile); color: var(--ink); border: 1px solid var(--line); border-radius: .3rem; font: inherit; padding: .3rem .65rem; cursor: pointer; }
 .messages { list-style: none; margin: 0; padding: 0; }
 .messages li { border-top: 1px solid var(--line); }
 .messages a { color: inherit; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .15rem .75rem; padding: .7rem .5rem; text-decoration: none; }

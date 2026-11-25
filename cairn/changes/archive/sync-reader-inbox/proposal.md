@@ -1,7 +1,7 @@
 ---
 cairn: change
 id: sync-reader-inbox
-status: active
+status: landed
 created: 2026-11-25
 ---
 

@@ -36,6 +36,24 @@ http://{$READER_HOST}:{$READER_PROXY_PORT} {
 		}
 	}
 
+	@refresh {
+		method POST
+		expression `{http.request.uri.path} == "/refresh"`
+	}
+	handle @refresh {
+		forward_auth unix//run/himalaya-auth/auth.sock {
+			uri /authelia/api/authz/forward-auth
+			header_up X-Forwarded-Proto https
+		}
+
+		reverse_proxy unix//run/himalaya-mail-reader/reader.sock {
+			header_up Host localhost
+			header_up -Cookie
+			header_up -Authorization
+			header_down Cache-Control "no-store"
+		}
+	}
+
 	handle {
 		respond 404
 	}

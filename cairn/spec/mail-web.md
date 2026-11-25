@@ -12,4 +12,10 @@ In named mode, the reader SHALL display an account switcher, open the first conf
 
 The hosted site proxy SHALL reach the authentication service through a private Unix socket. The project proxy, authentication service and session store SHALL use read-only container root filesystems, drop Linux capabilities, disable privilege escalation and bound container log retention.
 
-The reader MAY reuse a complete, successful folder list in memory for up to one minute for the same configured account and fixed MCP command. Message lists, messages, and attachments SHALL be fetched on each request.
+In live mode, the reader MAY reuse a complete, successful folder list in memory for up to one minute for the same configured account and fixed MCP command. In live mode, message lists, messages, and attachments SHALL be fetched on each request.
+
+In synchronized mode, the backend SHALL periodically refresh the folder list and first inbox page for each configured account. The reader SHALL serve the latest complete snapshot and MAY briefly reuse previously opened messages within account-scoped time, size, and count limits. Other folder pages and attachments SHALL remain available on demand. Standalone live mode SHALL remain compatible.
+
+
+
+The inbox SHALL display its account's last successful synchronization time with an explicit timezone and offer an authenticated, same-origin manual refresh action. A pending or failed refresh SHALL preserve any previous complete snapshot and its success timestamp. Successful refreshes SHALL update the displayed list and timestamp. Concurrent refresh requests for the same account SHALL share a single backend job. Reading and refreshing the inbox SHALL preserve mail flags.

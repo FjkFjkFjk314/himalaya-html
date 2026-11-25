@@ -79,3 +79,34 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s deploy/reader -v
 The tests exercise HTTP through the read-only MCP gateway and use
 `target/debug/himalaya` by default. Set
 `HIMALAYA_READER_TEST_BINARY` to test another build.
+
+## Background inbox synchronization
+
+Synchronized mode serves the first inbox page from a backend memory cache. A
+worker refreshes each account on startup and then on a staggered schedule
+(default interval 60 seconds, page size 25). The displayed time is the last
+successful inbox refresh. After a failed update, the reader keeps the previous
+complete page. The refresh button queues work for the selected account. Opening
+a message reads it on demand and may reuse that account's recent preview for
+five minutes. Attachments and subsequent folder pages remain on demand.
+
+1. On the executor host, create a private directory owned by the worker and a
+   private JSON file mapping each account alias to its fixed **read-only** MCP
+   command (an argv array). Start the worker under a service manager. For
+   example, with operator-supplied paths:
+
+   ```sh
+   python3 -B sync_backend.py --socket "$SYNC_SOCKET" --accounts "$ACCOUNT_MAP" --interval 60
+   ```
+
+2. For each account, configure the trusted transport to run
+   `sync_bridge.py --socket "$SYNC_SOCKET" --account "$FIXED_ALIAS"` on the
+   backend. Choose the alias from the server-side allowlist. Each reader command
+   must select the same account as the frontend selector. Keep the broker
+   socket accessible only to its service identity.
+3. Enable the reader with `HIMALAYA_READER_SYNC=1` and set
+   `HIMALAYA_READER_ORIGIN` to the external HTTPS origin, for example
+   `https://reader.example.invalid`. Protect the dedicated refresh POST with
+   the same authentication as the inbox and forward its Origin header and
+   form body. The HTTP response to a refresh redirects back to the account
+   inbox, where completion or failure is displayed.

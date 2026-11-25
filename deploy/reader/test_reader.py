@@ -10,13 +10,14 @@ import sys
 import tempfile
 import threading
 import unittest
+from contextlib import closing
 from pathlib import Path
 from queue import Queue
 from unittest.mock import patch
 
 from reader import (
     BackendError, FolderCache, LoopbackHTTPServer, MAX_CONCURRENT_REQUESTS, ReaderHandler,
-    UnixHTTPServer, call_mcp, load_accounts,
+    UnixHTTPServer, call_mcp, load_accounts, load_sync_origin,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -212,6 +213,117 @@ class ReaderTest(unittest.TestCase):
         self.assertEqual(self.request("/message?account=&message=m1")[0], 400)
 
 
+class ReaderSyncTest(unittest.TestCase):
+    origin = "https://reader.example.com"
+
+    def setUp(self):
+        server = LoopbackHTTPServer(("127.0.0.1", 0), ReaderHandler)
+        server.hosts = {"localhost"}
+        server.accounts = {"first": ["first-command"], "second": ["second-command"]}
+        server.legacy_account = None
+        server.sync_origin = self.origin
+        self.server = server
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        self.addCleanup(thread.join)
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+
+    def request(self, path, method="GET", body=None, headers=None):
+        with closing(http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=5)) as client:
+            client.request(method, path, body=body, headers={"Host": "localhost", **(headers or {})})
+            response = client.getresponse()
+            return response.status, response.headers, response.read()
+
+    @staticmethod
+    def snapshot(**overrides):
+        return {"structuredContent": {
+            "folders": [{"id": "provider-id", "name": "Inbox", "role": "inbox"}],
+            "envelopes": None, "last_success": None, "refreshing": False, "failed": False,
+            **overrides,
+        }}
+
+    def test_snapshot_status_polling_and_live_pagination(self):
+        envelopes = {"envelopes": [{"id": "m1", "subject": "A message"}], "nextPage": "page-2"}
+        folder_list = {"structuredContent": {"mailboxes": []}}
+        with patch("reader.call_mcp", side_effect=[
+            [self.snapshot(refreshing=True)],
+            [self.snapshot(envelopes=envelopes, last_success=0, refreshing=True)],
+            [self.snapshot(envelopes=envelopes, last_success=0, failed=True)],
+            [self.snapshot(envelopes={"envelopes": []}, last_success=60)],
+            [folder_list, {"structuredContent": {"envelopes": []}}],
+            [self.snapshot(failed=True)],
+        ]) as call:
+            status, headers, body = self.request("/?account=second")
+            self.assertEqual(status, 200)
+            self.assertIn("正在刷新收件箱".encode(), body)
+            self.assertNotIn(b"No messages.", body)
+            self.assertIn(b'http-equiv="refresh" content="3;url=/?account=second"', body)
+            self.assertIn("form-action 'self'", headers["Content-Security-Policy"])
+            self.assertEqual(headers["Referrer-Policy"], "same-origin")
+            self.assertIn(b'<form action="/refresh" method="post">', body)
+            self.assertIn(b'lang="zh-CN"', body)
+            self.assertIn("立即刷新".encode(), body)
+            self.assertIn(b'href="/?account=first"', body)
+            call.assert_called_with(["second-command"], [("reader_snapshot", {})])
+
+            status, _, body = self.request("/?account=second")
+            self.assertIn("正在刷新收件箱".encode(), body)
+            self.assertIn("上次同步".encode(), body)
+            self.assertIn(b"1970-01-01 00:00:00 UTC", body)
+            self.assertIn(b"A message", body)
+            self.assertIn(b"/?account=second&amp;mailbox=inbox&amp;page=2&amp;cursor=page-2", body)
+
+            status, _, body = self.request("/?account=second")
+            self.assertIn("刷新失败".encode(), body)
+            self.assertIn(b"1970-01-01 00:00:00 UTC", body)
+            self.assertIn(b"A message", body)
+            self.assertNotIn(b'http-equiv="refresh"', body)
+
+            status, _, body = self.request("/?account=second")
+            self.assertIn(b"1970-01-01 00:01:00 UTC", body)
+            self.assertIn(b"No messages.", body)
+
+            status, headers, _ = self.request("/?account=second&mailbox=inbox&page=2&cursor=page-2")
+            self.assertEqual(status, 200)
+            self.assertIn("form-action 'none'", headers["Content-Security-Policy"])
+            call.assert_called_with(["second-command"], [("mailbox_list", {}), (
+                "envelope_list", {"mailbox": "inbox", "page-size": 25, "page-token": "page-2"},
+            )])
+
+            status, _, body = self.request("/?account=first")
+            self.assertIn("刷新失败".encode(), body)
+            self.assertNotIn(b"No messages.", body)
+            call.assert_called_with(["first-command"], [("reader_snapshot", {})])
+
+    def test_same_origin_refresh_and_input_rejections(self):
+        form = {"Origin": self.origin, "Content-Type": "application/x-www-form-urlencoded"}
+        with patch("reader.call_mcp", return_value=[self.snapshot(refreshing=True)]) as call:
+            checks = (
+                ("GET", "/refresh", None, {}, 404),
+                ("POST", "/refresh", "account=first", {}, 403),
+                ("POST", "/refresh", "account=first", {**form, "Origin": "null"}, 403),
+                ("POST", "/refresh", "account=first", {**form, "Origin": self.origin + ".invalid"}, 403),
+                ("POST", "/refresh", "account=first", {**form, "Host": "other.example.com"}, 403),
+                ("POST", "/refresh?account=first", "account=first", form, 404),
+                ("POST", "/refresh", "account=first", {**form, "Content-Type": "text/plain"}, 415),
+                ("POST", "/refresh", "account=first", {**form, "Transfer-Encoding": "chunked"}, 400),
+                ("POST", "/refresh", "account=" + "x" * 4096, form, 413),
+                ("POST", "/refresh", "account=missing", form, 400),
+                ("POST", "/refresh", "account=", form, 400),
+                ("POST", "/refresh", "account=first&account=second", form, 400),
+                ("POST", "/refresh", "account=%", form, 400),
+            )
+            for method, path, body, headers, expected in checks:
+                with self.subTest(method=method, path=path, expected=expected):
+                    self.assertEqual(self.request(path, method, body, headers)[0], expected)
+            call.assert_not_called()
+            status, headers, body = self.request("/refresh", "POST", "account=second", form)
+            self.assertEqual((status, headers["Location"], body), (303, "/?account=second", b""))
+            self.assertEqual(headers["Cache-Control"], "no-store")
+            call.assert_called_once_with(["second-command"], [("reader_refresh", {})])
+
+
 class FolderCacheTest(unittest.TestCase):
     def test_reuses_only_the_same_account_and_command_until_expiry(self):
         folders = [{"id": "inbox", "name": "Inbox"}]
@@ -329,7 +441,8 @@ class UnixReaderTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             public = root / "public"
-            public.mkdir(mode=0o755)
+            public.mkdir()
+            public.chmod(0o755)
             symlink = root / "link"
             symlink.symlink_to(root, target_is_directory=True)
             for parent in (public, symlink):
@@ -338,6 +451,16 @@ class UnixReaderTest(unittest.TestCase):
 
 
 class ReaderConfigTest(unittest.TestCase):
+    def test_sync_requires_a_configured_origin(self):
+        self.assertIsNone(load_sync_origin({}))
+        origin = "https://reader.example.com"
+        self.assertEqual(load_sync_origin({
+            "HIMALAYA_READER_SYNC": "1", "HIMALAYA_READER_ORIGIN": origin,
+        }), origin)
+        for invalid in ("", "null", origin + "/", origin + "?", "https://user@reader.example.com"):
+            with self.subTest(origin=invalid), self.assertRaises(ValueError):
+                load_sync_origin({"HIMALAYA_READER_SYNC": "1", "HIMALAYA_READER_ORIGIN": invalid})
+
     def test_loads_named_and_legacy_accounts(self):
         self.assertEqual(load_accounts({"HIMALAYA_READER_MCP_COMMAND": '["himalaya","mcp"]'}),
                          ({None: ["himalaya", "mcp"]}, None))

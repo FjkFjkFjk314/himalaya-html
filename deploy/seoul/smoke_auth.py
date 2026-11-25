@@ -21,6 +21,7 @@ import time
 HOST = "reader.example.com"
 ORIGIN = f"https://{HOST}"
 COOKIE_NAME = "himalaya_reader_session"
+REFRESH_FORM = b"account=example"
 
 
 class Reader(BaseHTTPRequestHandler):
@@ -30,6 +31,19 @@ class Reader(BaseHTTPRequestHandler):
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"synthetic reader")
+
+    def do_POST(self):
+        assert self.path == "/refresh"
+        assert self.headers["Host"] == "localhost"
+        assert "Cookie" not in self.headers and "Authorization" not in self.headers
+        assert self.headers["Content-Type"] == "application/x-www-form-urlencoded"
+        assert self.rfile.read(int(self.headers["Content-Length"])) == REFRESH_FORM
+        if self.headers["Origin"] != ORIGIN:
+            self.send_response(403)
+        else:
+            self.send_response(303)
+            self.send_header("Location", "/?account=example")
+        self.end_headers()
 
     def log_message(self, *_):
         pass
@@ -74,20 +88,25 @@ def exercise(directory, reader_socket_dir):
         )
         return result.stdout
 
-    def request(path, *, cookie=None, data=None, headers=None, status=200):
+    def request(path, *, cookie=None, data=None, headers=None, method=None, status=200):
         headers = dict(headers or {})
         headers.setdefault("Host", HOST)
         headers.setdefault("Accept", "text/html")
         if cookie:
             headers["Cookie"] = cookie
         if data is not None:
-            headers.update({"Origin": ORIGIN, "Content-Type": "application/json"})
+            headers.setdefault("Origin", ORIGIN)
+            if isinstance(data, bytes):
+                headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
+            else:
+                headers.setdefault("Content-Type", "application/json")
+                data = json.dumps(data)
         connection = http.client.HTTPConnection("127.0.0.1", int(proxy_port), timeout=5)
         try:
             connection.request(
-                "GET" if data is None else "POST",
+                method or ("GET" if data is None else "POST"),
                 path,
-                None if data is None else json.dumps(data),
+                data,
                 headers,
             )
             result = connection.getresponse()
@@ -123,6 +142,10 @@ def exercise(directory, reader_socket_dir):
 
     def redis(*args):
         return compose("exec", "-T", "redis", "redis-cli", *args, output=True).strip()
+
+    def refresh(status, *, cookie=None, headers=None):
+        return request("/refresh", status=status, cookie=cookie, data=REFRESH_FORM,
+                       headers=headers)
 
     def sign_in(password, *, remember):
         headers, body = request(
@@ -193,6 +216,8 @@ def exercise(directory, reader_socket_dir):
         for path in protected:
             headers, _ = request(path, status=302)
             assert headers["Location"].startswith(ORIGIN + "/authelia/?")
+        headers, _ = refresh(303)
+        assert headers["Location"].startswith(ORIGIN + "/authelia/?")
         request("/", headers={"Host": "wrong.example.com"}, status=421)
         request(
             "/attachment",
@@ -217,6 +242,7 @@ def exercise(directory, reader_socket_dir):
         pending_cookie = pending.split(";", 1)[0]
         for path in protected:
             request(path, cookie=pending_cookie, status=302)
+        refresh(303, cookie=pending_cookie)
         time.sleep(2)
         authenticated = complete_login(seed, pending_cookie)
         assert cookie_expiry(authenticated) > cookie_expiry(pending)
@@ -233,6 +259,14 @@ def exercise(directory, reader_socket_dir):
             assert headers["Cache-Control"] == "no-store"
             assert not headers.get_all("Set-Cookie"), "access updated the browser cookie"
             assert body == b"synthetic reader"
+        headers, _ = refresh(303, cookie=cookie, headers={"Authorization": "Bearer synthetic"})
+        assert headers["Location"] == "/?account=example"
+        assert headers["Cache-Control"] == "no-store"
+        refresh(403, cookie=cookie, headers={"Origin": "https://different.example"})
+        for path in ("/", "/message", "/attachment", "/reader.css", "/REFRESH", "/refresh/"):
+            request(path, status=404, cookie=cookie, data=REFRESH_FORM)
+        for method in ("GET", "HEAD", "PUT", "DELETE"):
+            request("/refresh", status=404, cookie=cookie, method=method)
         assert 0 < int(redis("PTTL", key)) < lifetime - 500
         request("/attachment", status=302)
         compose("restart", "redis", "authelia")
@@ -252,11 +286,13 @@ def exercise(directory, reader_socket_dir):
         request("/authelia/api/logout", cookie=cookie, data={"targetURL": ORIGIN + "/"})
         for path in protected:
             request(path, cookie=cookie, status=302)
+        refresh(303, cookie=cookie)
         request("/attachment", cookie=expiring_cookie)
         assert redis("FLUSHDB", "SYNC") == "OK"
         request("/attachment", cookie=expiring_cookie, status=302)
         compose("stop", "authelia")
         request("/attachment", cookie=cookie, status=502)
+        refresh(502, cookie=cookie)
         print("Seoul loopback authentication checks passed")
     finally:
         compose("down", "--volumes")

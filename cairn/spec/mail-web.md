@@ -11,3 +11,5 @@ The standalone reader SHALL default to loopback TCP. The hosted reader SHALL use
 In named mode, the reader SHALL display an account switcher, open the first configured account on the bare home page and include the selected alias in folder, pagination, message and attachment links. It SHALL reject unknown, blank and repeated aliases and require an alias on queries and deep links unless a configured legacy alias handles missing account parameters. The single-command configuration SHALL continue accepting its existing URLs.
 
 The hosted site proxy SHALL reach the authentication service through a private Unix socket. The project proxy, authentication service and session store SHALL use read-only container root filesystems, drop Linux capabilities, disable privilege escalation and bound container log retention.
+
+The reader MAY reuse a complete, successful folder list in memory for up to one minute for the same configured account and fixed MCP command. Message lists, messages, and attachments SHALL be fetched on each request.

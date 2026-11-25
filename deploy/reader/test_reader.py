@@ -15,7 +15,7 @@ from queue import Queue
 from unittest.mock import patch
 
 from reader import (
-    BackendError, LoopbackHTTPServer, MAX_CONCURRENT_REQUESTS, ReaderHandler,
+    BackendError, FolderCache, LoopbackHTTPServer, MAX_CONCURRENT_REQUESTS, ReaderHandler,
     UnixHTTPServer, call_mcp, load_accounts,
 )
 
@@ -210,6 +210,50 @@ class ReaderTest(unittest.TestCase):
         self.assertIn(b"Safety &lt;check&gt;", body)
         self.assertIn(b"account=school&amp;mailbox=inbox", body)
         self.assertEqual(self.request("/message?account=&message=m1")[0], 400)
+
+
+class FolderCacheTest(unittest.TestCase):
+    def test_reuses_only_the_same_account_and_command_until_expiry(self):
+        folders = [{"id": "inbox", "name": "Inbox"}]
+        cache = FolderCache()
+        envelope = ("envelope_list", {"mailbox": "inbox"})
+        message = ("message_read", {"message-id": "m1"})
+        batch = [("mailbox_list", {}), envelope]
+        response = {"structuredContent": {"mailboxes": folders}}
+        with patch("reader.time.monotonic", return_value=100) as clock, \
+             patch("reader.call_mcp", side_effect=[
+                 [response, "list 1"], ["message 1"], [response, "list 2"],
+                 [response, "list 3"], [response, "list 4"],
+             ]) as call:
+            self.assertEqual(cache.fetch("first", ["one"], *envelope), (folders, "list 1"))
+            call.assert_called_with(["one"], batch)
+            clock.return_value = 159
+            self.assertEqual(cache.fetch("first", ["one"], *message), (folders, "message 1"))
+            call.assert_called_with(["one"], [message])
+            self.assertEqual(cache.fetch("second", ["one"], *envelope), (folders, "list 2"))
+            call.assert_called_with(["one"], batch)
+            self.assertEqual(cache.fetch("second", ["two"], *envelope), (folders, "list 3"))
+            call.assert_called_with(["two"], batch)
+            clock.return_value = 160
+            self.assertEqual(cache.fetch("first", ["one"], *envelope), (folders, "list 4"))
+            call.assert_called_with(["one"], batch)
+
+    def test_partial_failed_and_malformed_folder_lists_are_never_reused(self):
+        fetch = ("first", ["one"], "envelope_list", {})
+        folders = [{"id": "inbox", "name": "Inbox"}]
+        responses = (
+            {"isError": True, "structuredContent": {"mailboxes": folders}},
+            {"structuredContent": {"mailboxes": folders, "errors": ["failed"]}},
+            {"structuredContent": {"mailboxes": folders, "nextPage": "next"}},
+            {"structuredContent": {"mailboxes": [{"id": "inbox"}]}},
+        )
+        for reply in responses:
+            with self.subTest(reply=reply), patch("reader.call_mcp", return_value=[reply, {}]) as call:
+                cache = FolderCache()
+                cache.fetch(*fetch)
+                cache.fetch(*fetch)
+                self.assertEqual(call.call_count, 2)
+                call.assert_called_with(["one"], [("mailbox_list", {}), ("envelope_list", {})])
 
 
 class ReaderConcurrencyTest(unittest.TestCase):

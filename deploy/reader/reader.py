@@ -13,12 +13,13 @@ from html.parser import HTMLParser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from socketserver import ThreadingMixIn, UnixStreamServer
-from threading import BoundedSemaphore
+from threading import BoundedSemaphore, Lock
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
 
 PAGE_SIZE = 25
 TIMEOUT = 30
 MAX_CONCURRENT_REQUESTS = 3
+FOLDER_CACHE_TTL = 60
 MAX_RESPONSE = 20 * 1024 * 1024
 CSS = Path(__file__).with_name("reader.css")
 TOOLS = {"mailbox_list", "envelope_list", "message_read", "attachment_download"}
@@ -103,6 +104,34 @@ def structured(result, list_key=None):
     elif result.get("isError"):
         raise BackendError("tool failed")
     return data
+
+
+class FolderCache:
+    def __init__(self):
+        self.entries = {}
+        self.lock = Lock()
+
+    def fetch(self, account, command, tool, arguments):
+        command_key = tuple(command)
+        started = time.monotonic()
+        with self.lock:
+            cached = self.entries.get(account)
+        if cached and cached[0] == command_key and started - cached[1] < FOLDER_CACHE_TTL:
+            result, = call_mcp(command, [(tool, arguments)])
+            return cached[2], result
+
+        reply, result = call_mcp(command, [("mailbox_list", {}), (tool, arguments)])
+        data = structured(reply, "mailboxes")
+        folders = data["mailboxes"]
+        if not reply.get("isError") and not data.get("errors") and not data.get("nextPage") and all(
+            isinstance(folder, dict) and isinstance(folder.get("id"), str)
+            and isinstance(folder.get("name"), str) for folder in folders
+        ):
+            with self.lock:
+                cached = self.entries.get(account)
+                if cached is None or cached[1] <= started:
+                    self.entries[account] = (command_key, started, folders)
+        return folders, result
 
 
 class MailText(HTMLParser):
@@ -313,8 +342,7 @@ class ReaderHandler(BaseHTTPRequestHandler):
                 arguments["attachment-id"] = part
                 self.download(command, arguments)
                 return
-            folders, result = call_mcp(command, [("mailbox_list", {}), (tool, arguments)])
-            folders = structured(folders, "mailboxes")["mailboxes"]
+            folders, result = self.server.folder_cache.fetch(account, command, tool, arguments)
             folder_name = next((folder["name"] for folder in folders if folder["id"] == mailbox),
                                "Inbox" if mailbox == "inbox" else mailbox)
             if tool == "envelope_list":
@@ -401,6 +429,7 @@ class BoundedThreadingMixIn(ThreadingMixIn):
     daemon_threads = True
 
     def __init__(self, *args):
+        self.folder_cache = FolderCache()
         self.request_slots = BoundedSemaphore(MAX_CONCURRENT_REQUESTS)
         super().__init__(*args)
 

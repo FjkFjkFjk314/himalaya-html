@@ -106,6 +106,10 @@ folder builds its listing on demand. Attachments are fetched on demand.
    If an account has a separate read-only envelope source for the date index,
    pass its alias-to-argv mapping with `--date-accounts FILE`. These commands
    must implement the same MCP envelope listing contract for that account.
+   To display existing triage results, pass a trusted local Python module with
+   `--classification-module FILE`. Its `PriorityLookup().lookup(account, mailbox, rows)`
+   returns message IDs mapped to classification labels. The broker queries only
+   the displayed page. Opening a listing does not trigger classification.
 
 2. For each account, configure the trusted transport to run
    `sync_bridge.py --socket "$SYNC_SOCKET" --account "$FIXED_ALIAS"` on the

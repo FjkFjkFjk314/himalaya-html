@@ -18,7 +18,7 @@ from unittest.mock import patch
 
 from reader import (
     BackendError, FolderCache, LoopbackHTTPServer, MAX_CONCURRENT_REQUESTS, ReaderHandler,
-    UnixHTTPServer, call_mcp, load_accounts, load_sync_origin,
+    UnixHTTPServer, call_mcp, load_accounts, load_sync_origin, render_envelopes,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -43,6 +43,25 @@ Content-Disposition: attachment; filename="unsafe.html"
 <script>alert('attachment')</script>
 --test--
 """
+
+
+class ClassificationViewTest(unittest.TestCase):
+    def test_categories_and_lookup_status(self):
+        rows = [{"id": str(i), "flags": [], "mail_classification": label}
+                for i, label in enumerate(["urgent", "important", "promotional", "spam", "review", None, "<script>"])]
+        data = {"envelopes": rows}
+        self.assertNotIn("mail-class", render_envelopes(data, "inbox", 1, "Inbox", None))
+        data["classifications_available"] = True
+        page = render_envelopes(data, "inbox", 1, "Inbox", None)
+        for text in ["紧急", "重要", "广告", "垃圾邮件", "待确认"]:
+            self.assertIn(f"分类 · {text}<", page)
+        self.assertEqual(page.count("分类 · 未分类"), 2)
+        self.assertNotIn("<script>", page)
+        self.assertIn("新邮件", page)
+        data["classifications_available"] = False
+        page = render_envelopes(data, "inbox", 1, "Inbox", None)
+        self.assertIn("分类暂不可用", page)
+        self.assertNotIn("未分类", page)
 
 
 @unittest.skipUnless(BINARY.is_file(), "build Himalaya with Maildir support to run the reader smoke test")

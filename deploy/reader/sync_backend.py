@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import fcntl
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -41,6 +42,7 @@ DATE_LOAD_TIMEOUT = 60
 DATE_LIST_WAIT = 4
 DATE_FOLDERS = 24
 MAX_DATE_CACHE = 24 * 1024 * 1024
+MAIL_CLASSIFICATIONS = frozenset({"important", "urgent", "promotional", "spam", "review"})
 
 LIST_PARAMETERS = {"mailbox": str, "page": int, "page-size": int, "page-token": str}
 
@@ -129,12 +131,13 @@ class Account:
 
 class Backend:
     def __init__(self, commands, interval=60, executor=None, date_executor=None, date_directory=None,
-                 date_commands=None):
+                 date_commands=None, classification_lookup=None):
         self.interval = interval
         self.executor = executor if executor is not None else call_mcp
         self.date_executor = date_executor if date_executor is not None else self.execute_date
         self.date_directory = date_directory
         self.date_commands = date_commands if date_commands is not None else {}
+        self.classification_lookup = classification_lookup
         start = time.monotonic()
         spacing = min(5, interval / len(commands))
         self.accounts = {alias: Account(command, start + index * spacing)
@@ -387,6 +390,25 @@ class Backend:
         return {"envelopes": rows[stop - size:stop], "errors": [],
                 "nextPage": str(page + 1) if stop < len(rows) else None, "total": len(rows)}
 
+    def classify_page(self, alias, mailbox, data):
+        rows = [{key: value for key, value in row.items() if key != "mail_classification"}
+                for row in data["envelopes"]]
+        data["envelopes"] = rows
+        if self.classification_lookup is None or mailbox.casefold() != "inbox":
+            return data
+        try:
+            labels = self.classification_lookup(alias, mailbox, rows)
+        except Exception:
+            # Classification is optional. Do not log classifier errors or mail data.
+            labels = None
+        data["classifications_available"] = isinstance(labels, dict)
+        if isinstance(labels, dict):
+            for row in rows:
+                label = labels.get(row["id"])
+                if isinstance(label, str) and label in MAIL_CLASSIFICATIONS:
+                    row["mail_classification"] = label
+        return data
+
     def date_snapshot(self, alias, schedule=False):
         with self.condition:
             snapshot = self.snapshot(alias, schedule=schedule)
@@ -397,7 +419,9 @@ class Backend:
             snapshot["last_success"] = folder.last_success
             snapshot["refreshing"] = folder.refreshing or folder.queued
             snapshot["failed"] = folder.failed
-            return snapshot
+        if snapshot["envelopes"] is not None:
+            self.classify_page(alias, "inbox", snapshot["envelopes"])
+        return snapshot
 
     def list_by_date(self, alias, args):
         page = args.get("page", 1)
@@ -407,14 +431,16 @@ class Backend:
             page = int(args["page-token"])
             if not 1 <= page <= 1_000_000:
                 raise BackendError("invalid date page")
+        mailbox = args.get("mailbox", "inbox")
         with self.condition:
-            folder = self.date_folder(alias, args.get("mailbox", "inbox"), requested=True)
+            folder = self.date_folder(alias, mailbox, requested=True)
             if folder.envelopes is None:
                 self.condition.wait_for(
                     lambda: not folder.refreshing or folder.envelopes is not None,
                     timeout=DATE_LIST_WAIT,
                 )
-            return self.date_page(folder, page, args.get("page-size", PAGE_SIZE))
+            data = self.date_page(folder, page, args.get("page-size", PAGE_SIZE))
+        return self.classify_page(alias, mailbox, data)
 
     def expire_bodies(self, now):
         for item, (expiry, _result, _size) in list(self.bodies.items()):
@@ -635,18 +661,38 @@ def load_commands(path):
     return commands
 
 
+def load_classification_lookup(path):
+    if path is None:
+        return None
+    spec = importlib.util.spec_from_file_location("reader_classification", path)
+    if spec is None or spec.loader is None:
+        raise ValueError("invalid classification module")
+    try:
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        lookup = module.PriorityLookup().lookup
+    except Exception:
+        raise ValueError("could not load classification module") from None
+    if not callable(lookup):
+        raise ValueError("invalid classification lookup")
+    return lookup
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--socket", required=True, type=Path)
     parser.add_argument("--accounts", required=True, type=Path)
     parser.add_argument("--date-accounts", type=Path,
                         help="optional read-only listing commands for configured account aliases")
+    parser.add_argument("--classification-module", type=Path,
+                        help="optional trusted local module providing a read-only classification lookup")
     parser.add_argument("--interval", default=60, type=int)
     args = parser.parse_args()
     if args.interval < RETRY_DELAY:
         parser.error(f"--interval must be at least {RETRY_DELAY} seconds")
     try:
         commands = load_commands(args.accounts)
+        classification_lookup = load_classification_lookup(args.classification_module)
         date_commands = load_commands(args.date_accounts) if args.date_accounts is not None else {}
         if not date_commands.keys() <= commands.keys():
             raise ValueError("date listing commands must use configured account aliases")
@@ -665,7 +711,7 @@ def main():
                     raise ValueError("the socket path exists and is not an owned socket")
                 args.socket.unlink()
             backend = Backend(commands, args.interval, date_directory=args.socket.parent,
-                              date_commands=date_commands)
+                              date_commands=date_commands, classification_lookup=classification_lookup)
             with Server(args.socket, backend) as server:
                 try:
                     stopping = Event()

@@ -213,6 +213,12 @@ def render_page(folders, mailbox, title, content, account, accounts, *, synced=F
 <nav aria-label="Folders">{"".join(nav)}</nav><main>{content}</main></div></body></html>"""
 
 
+CLASSIFICATIONS = {
+    "urgent": "紧急", "important": "重要", "promotional": "广告",
+    "spam": "垃圾邮件", "review": "待确认",
+}
+
+
 def render_envelopes(data, mailbox, page, folder_name, account, *, controls=""):
     rows = []
     for row in data["envelopes"]:
@@ -233,10 +239,18 @@ def render_envelopes(data, mailbox, page, folder_name, account, *, controls=""):
             state, label = ("read", "已读") if seen else ("unread", "新邮件")
         else:
             state, label = "unknown", "状态未知"
+        classification = ""
+        if data.get("classifications_available") is True:
+            category = row.get("mail_classification")
+            category = category if isinstance(category, str) and category in CLASSIFICATIONS else "unknown"
+            caption = CLASSIFICATIONS.get(category, "未分类")
+            classification = f'<small class="mail-class {category}" lang="zh-CN">分类 · {caption}</small>'
         rows.append(f'<li class="{state}"><a href="{link}"><span class="subject">{subject}</span>'
                     f'<small class="sender">{sender}</small>{sent}'
-                    f'<small class="read-status" lang="zh-CN">{label}</small></a></li>')
+                    f'<small class="read-status" lang="zh-CN">{label}</small>{classification}</a></li>')
     content = f'<h1>{esc(folder_name)}</h1>{controls}'
+    if data.get("classifications_available") is False:
+        content += '<p role="status" lang="zh-CN">邮件分类暂不可用。</p>'
     if data.get("errors"):
         content += "<p>Some messages could not be listed.</p>"
     content += '<ul class="messages">' + "".join(rows) + "</ul>" if rows else "<p>No messages.</p>"

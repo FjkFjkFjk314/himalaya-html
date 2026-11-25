@@ -18,6 +18,53 @@ def listed(key, items, **extra):
 
 
 class SyncTest(unittest.TestCase):
+    def test_date_responses_expose_only_valid_classifications_without_modifying_cache(self):
+        calls = []
+        rows = [{"id": "7", "mail_classification": "spam"}, {"id": "8"}, {"id": "9"}]
+
+        def lookup(alias, mailbox, envelopes):
+            calls.append((alias, mailbox, [row["id"] for row in envelopes]))
+            if mailbox == "INBOX":
+                return {"7": "urgent", "8": ["important"]}
+            return {"7": "important", "8": "invented"}
+
+        backend = sync.Backend({"example": ["primary"]}, classification_lookup=lookup)
+        backend.accounts["example"].envelopes = {"envelopes": rows}
+        due = time.monotonic() + 60
+        for mailbox in ("inbox", "INBOX", "test-folder"):
+            backend.date_folders["example", mailbox] = sync.DateFolder(envelopes=rows, due=due)
+        inbox = backend.date_snapshot("example")["envelopes"]
+        alternate_inbox = backend.list_by_date("example", {"mailbox": "INBOX"})
+        folder = backend.list_by_date("example", {"mailbox": "test-folder"})
+        self.assertEqual(calls, [("example", "inbox", ["7", "8", "9"]),
+                                 ("example", "INBOX", ["7", "8", "9"])])
+        self.assertTrue(inbox["classifications_available"])
+        self.assertTrue(alternate_inbox["classifications_available"])
+        self.assertNotIn("classifications_available", folder)
+        self.assertEqual(inbox["envelopes"], [{"id": "7", "mail_classification": "important"},
+                                             {"id": "8"}, {"id": "9"}])
+        self.assertEqual(alternate_inbox["envelopes"][0]["mail_classification"], "urgent")
+        self.assertEqual(alternate_inbox["envelopes"][1:], [{"id": "8"}, {"id": "9"}])
+        self.assertEqual(folder["envelopes"], [{"id": "7"}, {"id": "8"}, {"id": "9"}])
+        self.assertEqual(rows[0]["mail_classification"], "spam")
+        self.assertEqual(backend.snapshot("example")["envelopes"], {"envelopes": rows})
+
+    def test_optional_classification_distinguishes_unavailable_from_no_matches(self):
+        rows = [{"id": "1"}]
+        backend = sync.Backend({"example": ["primary"]})
+        backend.date_folders["example", "inbox"] = sync.DateFolder(
+            envelopes=rows, due=time.monotonic() + 60
+        )
+        self.assertNotIn("classifications_available", backend.list_by_date("example", {}))
+        backend.classification_lookup = lambda *_: {}
+        self.assertTrue(backend.list_by_date("example", {})["classifications_available"])
+        backend.classification_lookup = lambda *_: None
+        self.assertFalse(backend.list_by_date("example", {})["classifications_available"])
+        with patch.object(backend, "classification_lookup", side_effect=OSError):
+            result = backend.list_by_date("example", {})
+        self.assertFalse(result["classifications_available"])
+        self.assertEqual(result["envelopes"], rows)
+
     def test_date_listing_and_snapshot_sort_across_backend_pages(self):
         rows = [
             {"id": "6", "date": "2026-11-25T11:00:00+08:00"},

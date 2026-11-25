@@ -33,6 +33,8 @@ h2 { font: 400 1.4rem Georgia, serif; }
 .messages time, .messages .missing-date { font-size: .82rem; grid-area: 1 / 2; }
 .messages .read-status { grid-area: 2 / 2; justify-self: end; }
 .messages .unread .read-status { color: var(--accent); font-weight: 700; }
+.messages .mail-class { grid-column: 1 / -1; font-size: .82rem; }
+.messages .mail-class.urgent, .messages .mail-class.important { color: var(--accent); font-weight: 700; }
 .pagination { display: flex; gap: 1rem; margin-top: 1.25rem; }
 dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: .25rem .75rem; }
 dt { font-weight: 600; }

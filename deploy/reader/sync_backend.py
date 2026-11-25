@@ -170,6 +170,7 @@ class Backend:
                 "folders": state.folders if state.folders is not None else [],
                 "envelopes": state.envelopes,
                 "last_success": state.last_success,
+                "refresh_interval_seconds": self.interval,
                 "refreshing": state.running or state.queued or state.due <= now,
                 "failed": state.failed,
             }

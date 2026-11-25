@@ -10,7 +10,7 @@ import selectors
 import stat
 import subprocess
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -18,6 +18,7 @@ from socketserver import ThreadingMixIn, UnixStreamServer
 from threading import BoundedSemaphore, Lock
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
 
+BEIJING_TIME = timezone(timedelta(hours=8))
 PAGE_SIZE = 25
 TIMEOUT = 30
 MAX_CONCURRENT_REQUESTS = 3
@@ -244,11 +245,14 @@ def render_snapshot(snapshot, account, accounts):
     stamp = "上次同步 暂无成功记录"
     if last_success is not None:
         try:
-            instant = datetime.fromtimestamp(last_success, timezone.utc)
+            instant = datetime.fromtimestamp(last_success, BEIJING_TIME)
         except (ValueError, OverflowError, OSError) as error:
             raise BackendError("invalid sync time") from error
         stamp = (f'上次同步 <time datetime="{instant.isoformat()}">'
-                 f'{instant:%Y-%m-%d %H:%M:%S} UTC</time>')
+                 f'{instant:%Y-%m-%d %H:%M:%S} 北京时间</time>')
+    interval = snapshot.get("refresh_interval_seconds")
+    if type(interval) is int and interval > 0:
+        stamp += f"<br>约每 {interval} 秒自动刷新"
     if refreshing:
         status = "正在刷新收件箱…"
     elif failed:

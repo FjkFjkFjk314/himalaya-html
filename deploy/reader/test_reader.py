@@ -239,7 +239,7 @@ class ReaderSyncTest(unittest.TestCase):
     def snapshot(**overrides):
         return {"structuredContent": {
             "folders": [{"id": "provider-id", "name": "Inbox", "role": "inbox"}],
-            "envelopes": None, "last_success": None, "refreshing": False, "failed": False,
+            "refresh_interval_seconds": 90, "envelopes": None, "last_success": None, "refreshing": False, "failed": False,
             **overrides,
         }}
 
@@ -264,24 +264,25 @@ class ReaderSyncTest(unittest.TestCase):
             self.assertIn(b'<form action="/refresh" method="post">', body)
             self.assertIn(b'lang="zh-CN"', body)
             self.assertIn("立即刷新".encode(), body)
+            self.assertIn("约每 90 秒自动刷新".encode(), body)
             self.assertIn(b'href="/?account=first"', body)
             call.assert_called_with(["second-command"], [("reader_snapshot", {})])
 
             status, _, body = self.request("/?account=second")
             self.assertIn("正在刷新收件箱".encode(), body)
             self.assertIn("上次同步".encode(), body)
-            self.assertIn(b"1970-01-01 00:00:00 UTC", body)
+            self.assertIn("1970-01-01 08:00:00 北京时间".encode(), body)
             self.assertIn(b"A message", body)
             self.assertIn(b"/?account=second&amp;mailbox=inbox&amp;page=2&amp;cursor=page-2", body)
 
             status, _, body = self.request("/?account=second")
             self.assertIn("刷新失败".encode(), body)
-            self.assertIn(b"1970-01-01 00:00:00 UTC", body)
+            self.assertIn("1970-01-01 08:00:00 北京时间".encode(), body)
             self.assertIn(b"A message", body)
             self.assertNotIn(b'http-equiv="refresh"', body)
 
             status, _, body = self.request("/?account=second")
-            self.assertIn(b"1970-01-01 00:01:00 UTC", body)
+            self.assertIn("1970-01-01 08:01:00 北京时间".encode(), body)
             self.assertIn(b"No messages.", body)
 
             status, headers, _ = self.request("/?account=second&mailbox=inbox&page=2&cursor=page-2")

@@ -18,4 +18,4 @@ In synchronized mode, the backend SHALL periodically refresh the folder list and
 
 
 
-The inbox SHALL display its account's last successful synchronization time with an explicit timezone and offer an authenticated, same-origin manual refresh action. A pending or failed refresh SHALL preserve any previous complete snapshot and its success timestamp. Successful refreshes SHALL update the displayed list and timestamp. Concurrent refresh requests for the same account SHALL share a single backend job. Reading and refreshing the inbox SHALL preserve mail flags.
+The inbox SHALL display its account's last successful synchronization time in Beijing time (UTC+08:00) alongside its configured automatic refresh interval and offer an authenticated, same-origin manual refresh action. A pending or failed refresh SHALL preserve any previous complete snapshot and its success timestamp. Successful refreshes SHALL update the displayed list and timestamp. Concurrent refresh requests for the same account SHALL share a single backend job. Reading and refreshing the inbox SHALL preserve mail flags.

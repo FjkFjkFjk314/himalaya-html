@@ -14,7 +14,7 @@ Owner chat is available over local CLI and Lody ACP. It persists session history
 
 Routine GitHub Actions test-run failures are identified from their notification metadata. They appear as 普通 in the inbox and are collected in a single encrypted daily Bark digest at ordinary priority. Repeated failures are counted. Empty digests are skipped. Deployment, production and security incidents remain eligible for individual triage.
 
-The owner assistant uses conversational Chinese by default, leads with the most relevant information and states uncertainty when evidence is incomplete. The owner can explicitly save a preferred tone for subsequent CLI and ACP sessions.
+The owner assistant uses conversational Chinese by default, leads with the most relevant information and states uncertainty when evidence is incomplete. The owner can explicitly save a preferred tone for subsequent CLI and ACP sessions. In owner chat, the assistant can also persist changes to its SOUL.md tone, level of detail and initiative directly from conversational feedback. It can inspect its current traits and restore a previous combination. Explicit owner preferences take precedence. Personality edits cannot modify mail permissions, notification rules or the unattended classifier.
 
 In either interface the owner can list notification rules and ask in ordinary language to add or remove one. The assistant stages a proposal with its scope and delivery action. Approval requires an explicit, expiring, single-use confirmation through an owner interface. Mail and OCR text are reference data and cannot approve changes.
 

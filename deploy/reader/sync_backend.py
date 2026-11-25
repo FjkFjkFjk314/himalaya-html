@@ -42,7 +42,7 @@ DATE_LOAD_TIMEOUT = 60
 DATE_LIST_WAIT = 4
 DATE_FOLDERS = 24
 MAX_DATE_CACHE = 24 * 1024 * 1024
-MAIL_CLASSIFICATIONS = frozenset({"important", "urgent", "promotional", "spam", "review"})
+MAIL_CLASSIFICATIONS = frozenset({"important", "urgent", "promotional", "spam", "review", "routine"})
 
 LIST_PARAMETERS = {"mailbox": str, "page": int, "page-size": int, "page-token": str}
 

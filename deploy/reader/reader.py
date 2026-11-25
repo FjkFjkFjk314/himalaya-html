@@ -214,7 +214,7 @@ def render_page(folders, mailbox, title, content, account, accounts, *, synced=F
 
 
 CLASSIFICATIONS = {
-    "urgent": "紧急", "important": "重要", "promotional": "广告",
+    "urgent": "紧急", "important": "重要", "promotional": "广告", "routine": "普通",
     "spam": "垃圾邮件", "review": "待确认",
 }
 

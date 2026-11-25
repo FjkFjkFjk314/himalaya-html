@@ -22,4 +22,4 @@ The inbox SHALL display its account's last successful synchronization time in Be
 
 The reader lists each folder by descending sent time before pagination and displays available timestamps in Beijing time. Read status reflects the mailbox's seen flag. An unread message is labelled 新邮件 and a seen message 已读. If flags are unavailable the reader displays 状态未知.
 
-When a classification source is configured, the reader displays each applicable message’s existing triage category alongside its read status. Urgent important mail has a distinct urgent label. An unmatched message displays 未分类. A failed lookup displays a temporary availability notice and preserves access to the listing.
+When a classification source is configured, the reader displays each applicable message’s existing triage category alongside its read status. Urgent important mail has a distinct urgent label. Routine digest items display 普通. An unmatched message displays 未分类. A failed lookup displays a temporary availability notice and preserves access to the listing.

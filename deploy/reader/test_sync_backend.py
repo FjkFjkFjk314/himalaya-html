@@ -26,7 +26,7 @@ class SyncTest(unittest.TestCase):
             calls.append((alias, mailbox, [row["id"] for row in envelopes]))
             if mailbox == "INBOX":
                 return {"7": "urgent", "8": ["important"]}
-            return {"7": "important", "8": "invented"}
+            return {"7": "important", "8": "invented", "9": "routine"}
 
         backend = sync.Backend({"example": ["primary"]}, classification_lookup=lookup)
         backend.accounts["example"].envelopes = {"envelopes": rows}
@@ -42,7 +42,7 @@ class SyncTest(unittest.TestCase):
         self.assertTrue(alternate_inbox["classifications_available"])
         self.assertNotIn("classifications_available", folder)
         self.assertEqual(inbox["envelopes"], [{"id": "7", "mail_classification": "important"},
-                                             {"id": "8"}, {"id": "9"}])
+                                             {"id": "8"}, {"id": "9", "mail_classification": "routine"}])
         self.assertEqual(alternate_inbox["envelopes"][0]["mail_classification"], "urgent")
         self.assertEqual(alternate_inbox["envelopes"][1:], [{"id": "8"}, {"id": "9"}])
         self.assertEqual(folder["envelopes"], [{"id": "7"}, {"id": "8"}, {"id": "9"}])

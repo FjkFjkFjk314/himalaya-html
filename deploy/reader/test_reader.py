@@ -47,13 +47,14 @@ Content-Disposition: attachment; filename="unsafe.html"
 
 class ClassificationViewTest(unittest.TestCase):
     def test_categories_and_lookup_status(self):
+        labels = ["urgent", "important", "promotional", "spam", "review", "routine", None, "<script>"]
         rows = [{"id": str(i), "flags": [], "mail_classification": label}
-                for i, label in enumerate(["urgent", "important", "promotional", "spam", "review", None, "<script>"])]
+                for i, label in enumerate(labels)]
         data = {"envelopes": rows}
         self.assertNotIn("mail-class", render_envelopes(data, "inbox", 1, "Inbox", None))
         data["classifications_available"] = True
         page = render_envelopes(data, "inbox", 1, "Inbox", None)
-        for text in ["紧急", "重要", "广告", "垃圾邮件", "待确认"]:
+        for text in ["紧急", "重要", "广告", "垃圾邮件", "待确认", "普通"]:
             self.assertIn(f"分类 · {text}<", page)
         self.assertEqual(page.count("分类 · 未分类"), 2)
         self.assertNotIn("<script>", page)

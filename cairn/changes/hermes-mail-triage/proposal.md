@@ -1,7 +1,7 @@
 ---
 cairn: change
 id: hermes-mail-triage
-status: active
+status: landed
 created: 2026-11-25
 ---
 # Classify incoming mail and notify the owner

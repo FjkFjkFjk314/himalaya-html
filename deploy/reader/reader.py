@@ -2,6 +2,7 @@
 
 import argparse
 import base64
+import hashlib
 import html
 import json
 import os
@@ -233,6 +234,24 @@ def render_envelopes(data, mailbox, page, folder_name, account, *, controls=""):
     return content + f'<div class="pagination">{"".join(links)}</div>'
 
 
+# Only this static script is authorized by the inbox CSP.
+AGE_SCRIPT = """(() => {
+  const timer = document.getElementById("sync-age");
+  const initial = Number(timer.dataset.seconds);
+  const start = performance.now();
+  function update() {
+    const seconds = initial + Math.floor((performance.now() - start) / 1000);
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor(seconds / 60) % 60;
+    timer.textContent = (hours ? hours + " 小时 " : "") +
+      (hours || minutes ? minutes + " 分 " : "") + seconds % 60 + " 秒";
+  }
+  update();
+  setInterval(update, 1000);
+})();"""
+AGE_HASH = base64.b64encode(hashlib.sha256(AGE_SCRIPT.encode()).digest()).decode()
+
+
 def render_snapshot(snapshot, account, accounts):
     folders, data, last_success, refreshing, failed = (
         snapshot[key] for key in ("folders", "envelopes", "last_success", "refreshing", "failed")
@@ -250,6 +269,10 @@ def render_snapshot(snapshot, account, accounts):
             raise BackendError("invalid sync time") from error
         stamp = (f'上次同步 <time datetime="{instant.isoformat()}">'
                  f'{instant:%Y-%m-%d %H:%M:%S} 北京时间</time>')
+        seconds = max(0, int(time.time() - last_success))
+        stamp += (f'<br>本页数据距上次同步已过 <span role="timer" aria-live="off" '
+                  f'id="sync-age" data-seconds="{seconds}">{seconds} 秒</span>'
+                  f'<script>{AGE_SCRIPT}</script>')
     interval = snapshot.get("refresh_interval_seconds")
     if type(interval) is int and interval > 0:
         stamp += f"<br>约每 {interval} 秒自动刷新"
@@ -326,9 +349,10 @@ class ReaderHandler(BaseHTTPRequestHandler):
         self.send_header("Referrer-Policy", "same-origin" if refresh_form else "no-referrer")
         self.send_header("X-Frame-Options", "DENY")
         form_source = "'self'" if refresh_form else "'none'"
+        script_policy = f"; script-src 'sha256-{AGE_HASH}'" if refresh_form else ""
         self.send_header("Content-Security-Policy",
                          "default-src 'none'; style-src 'self'; base-uri 'none'; "
-                         f"frame-ancestors 'none'; form-action {form_source}")
+                         f"frame-ancestors 'none'; form-action {form_source}{script_policy}")
         if disposition:
             self.send_header("Content-Disposition", disposition)
         if location:

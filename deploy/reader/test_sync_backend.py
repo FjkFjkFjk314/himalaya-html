@@ -117,6 +117,19 @@ class SyncTest(unittest.TestCase):
         legacy = backend.call("example", "envelope_list", {"mailbox": "test-folder"})
         self.assertEqual(sync.structured(legacy)["envelopes"], [{"id": "primary-row"}])
 
+    def test_manual_date_refresh_queues_during_cooldown(self):
+        backend = sync.Backend({"example": ["synthetic"]})
+        folder = backend.date_folders["example", "inbox"]
+        folder.envelopes = []
+        folder.manual_after = time.monotonic() + 5
+        folder.due = folder.manual_after + 50
+        first = backend.date_snapshot("example", schedule=True)
+        self.assertTrue(first["refreshing"])
+        self.assertEqual(folder.due, folder.manual_after)
+        second = backend.date_snapshot("example", schedule=True)
+        self.assertTrue(second["refreshing"])
+        self.assertEqual(folder.due, folder.manual_after)
+
     def test_scheduled_snapshot_and_failed_refresh_preserves_complete_state(self):
         calls = []
         partial = False

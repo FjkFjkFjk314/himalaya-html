@@ -109,6 +109,7 @@ class DateFolder:
     last_success: int | None = None
     due: float = 0
     manual_after: float = 0
+    queued: bool = False
     refreshing: bool = False
     failed: bool = False
 
@@ -245,9 +246,14 @@ class Backend:
             folder = self.date_folders[key] = DateFolder()
         self.date_folders.move_to_end(key)
         now = time.monotonic()
+        if schedule and not (folder.refreshing or folder.queued):
+            folder.due = min(folder.due, max(now, folder.manual_after))
+            folder.queued = True
+            self.condition.notify_all()
         start = requested and folder.envelopes is None and not folder.failed
-        due = folder.manual_after if schedule or start else folder.due
+        due = min(folder.due, folder.manual_after) if start else folder.due
         if not self.stopping and not folder.refreshing and now >= due:
+            folder.queued = False
             folder.refreshing = True
             self.date_workers.submit(self.load_date_folder, key, folder)
         return folder
@@ -389,7 +395,7 @@ class Backend:
                 self.date_page(folder, 1, PAGE_SIZE) if folder.envelopes is not None else None
             )
             snapshot["last_success"] = folder.last_success
-            snapshot["refreshing"] = folder.refreshing
+            snapshot["refreshing"] = folder.refreshing or folder.queued
             snapshot["failed"] = folder.failed
             return snapshot
 
